@@ -1,0 +1,12 @@
+.private/
+.venv/
+.models/
+data/
+reports/
+__pycache__/
+*.py[cod]
+.DS_Store
+/.desktop-build.*/
+/.desktop-module-cache/
+/*.app/
+/分享包/

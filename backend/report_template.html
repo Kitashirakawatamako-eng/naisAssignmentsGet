@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-show-grades="false" data-date-column="due">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${day} · 作业速览</title>
+<style>
+:root {
+  color-scheme: light;
+  --paper: #f4f5f1;
+  --surface: #fff;
+  --ink: #202a26;
+  --muted: #586761;
+  --line: #e0e6e1;
+  --brand: #22584b;
+  --brand-soft: #e7f2ec;
+  --alert: #9c4028;
+  --alert-soft: #fcf0e7;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.55 Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+[hidden] { display: none !important; }
+a { color: var(--brand); text-underline-offset: 3px; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+h1, h2, h3, p { margin: 0; }
+.page { width: min(100% - 48px, 940px); margin: 36px auto 56px; }
+.page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 18px; }
+.calendar { color: var(--brand); font-weight: 650; font-size: .82rem; }
+h1 { font-size: clamp(1.8rem, 4vw, 2.2rem); line-height: 1.16; letter-spacing: -.04em; margin: 4px 0 0; }
+.sync-note { display: inline-flex; gap: 4px; color: var(--muted); font-size: .83rem; }
+.sync-note time, .task-when, .task-grade { font-variant-numeric: tabular-nums; }
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.portal { display: inline-flex; gap: 8px; align-items: center; white-space: nowrap; border: 1px solid #c9d9d0; border-radius: 9px; padding: 8px 13px; background: var(--surface); font-size: .88rem; font-weight: 650; text-decoration: none; }
+.portal:hover { background: var(--brand-soft); }
+.board { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 10px 30px #20382b08; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 4px; padding: 10px 14px; }
+.dates { display: flex; flex-wrap: wrap; gap: 3px; }
+.toolbar-actions { display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
+.period, .filter-toggle, .export-todo { border: 0; border-radius: 8px; background: transparent; font-size: .87rem; font-weight: 600; padding: 6px 10px; white-space: nowrap; }
+.period:hover, .filter-toggle:hover { background: var(--paper); }
+.period[aria-pressed="true"], .filter-toggle:is([data-active="1"], [aria-expanded="true"]) { background: var(--brand-soft); color: var(--brand); }
+.filter-toggle { color: var(--muted); }
+.export-todo { border: 1px solid #c9d9d0; color: var(--brand); background: #f8faf7; }
+.export-todo:not(:disabled):hover { background: var(--brand-soft); }
+.export-todo:disabled { opacity: .52; cursor: default; }
+.filters { display: grid; gap: 9px; padding: 0 16px 14px; }
+.filter-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.search input, .filter-reset { min-height: 36px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfa; padding: 6px 11px; font-size: .86rem; }
+.search input { width: 100%; }
+.search input::placeholder, .filter-reset { color: var(--muted); }
+.search input:hover, .filter-reset:hover { border-color: #9caf9f; }
+.filter-row { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); align-items: start; gap: 6px; }
+.filter-label { padding-top: 5px; color: var(--muted); font-size: .82rem; font-weight: 600; }
+.filter-options { display: flex; flex-wrap: wrap; gap: 5px; }
+.filter-choice, .filter-all { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; max-width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); padding: 3px 8px; font-size: .82rem; cursor: pointer; overflow-wrap: anywhere; }
+.filter-choice input { margin: 0; flex: none; accent-color: var(--brand); }
+.filter-choice:hover, .filter-all:hover { background: var(--paper); }
+.filter-choice:has(input:checked), .filter-all[aria-pressed="true"] { background: var(--brand-soft); border-color: #c9d9d0; color: var(--brand); }
+.list-head, summary.task-row { display: grid; grid-template-columns: minmax(0, 1fr) 122px 72px 12px; column-gap: 12px; align-items: center; padding: 0 16px; }
+.list-head { color: var(--muted); background: #f8faf7; font-size: .75rem; padding-top: 7px; padding-bottom: 7px; border-block: 1px solid var(--line); }
+.score-label, .task-grade { text-align: right; }
+details.task + details.task { border-top: 1px solid var(--line); }
+summary.task-row { cursor: pointer; list-style: none; min-height: 57px; padding-block: 8px; }
+summary.task-row::-webkit-details-marker { display: none; }
+summary.task-row:hover, .task[open] > summary.task-row { background: #f9fbf8; }
+summary.task-row:focus-visible { outline-offset: -3px; }
+.task-name { min-width: 0; }
+.task-brief { display: block; font-size: .93rem; font-weight: 580; overflow-wrap: anywhere; line-height: 1.45; }
+.task-sub { display: block; color: var(--muted); font-size: .76rem; margin-bottom: 2px; }
+.day-group { margin: 0; padding: 5px 16px; background: #f8faf7; border-block: 1px solid var(--line); font-size: .78rem; font-weight: 650; color: var(--brand); }
+.task-when { font-size: .82rem; color: var(--muted); }
+.record-when { display: none; }
+html[data-date-column="assigned"] .due-when { display: none; }
+html[data-date-column="assigned"] .record-when { display: inline; }
+.deadline-alert { display: inline-block; background: var(--alert-soft); color: var(--alert); border-radius: 6px; padding: 2px 6px; font-weight: 650; }
+.deadline-soon { color: var(--brand); font-weight: 650; }
+.task-grade { font-size: .82rem; white-space: nowrap; color: var(--muted); }
+.task-grade strong { font-size: .99rem; color: var(--ink); }
+.arrow { display: block; border: solid #62766d; border-width: 0 1.5px 1.5px 0; width: 7px; height: 7px; transform: translateY(-2px) rotate(45deg); justify-self: end; }
+.task[open] > summary > .arrow { transform: translateY(2px) rotate(225deg); }
+html[data-show-grades="false"] :is(.score-label, .task-grade) { display: none; }
+html[data-show-grades="false"] :is(.list-head, summary.task-row) {
+  grid-template-columns: minmax(0, 1fr) 122px 12px;
+}
+.task-body { border-top: 1px solid var(--line); padding: 16px 20px 18px; font-size: .9rem; }
+.task-body h3 { font-size: .86rem; margin-bottom: 3px; }
+.task-body .detail-title { margin-bottom: 6px; }
+.task-body ul { margin: 0; padding-left: 1.3rem; }
+.task-body li + li { margin-top: 3px; }
+.detail-block + .detail-block { margin-top: 13px; }
+.origin-link, .secondary { color: var(--muted); font-size: .8rem; }
+.origin-link { margin-left: .45rem; }
+.source { margin-top: 13px; }
+.source summary { cursor: pointer; color: var(--brand); width: fit-content; }
+.source p { margin-top: 6px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.empty { padding: 28px 20px; color: var(--muted); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (max-width: 600px) {
+  .page { width: calc(100% - 20px); margin-top: 20px; }
+  .page-head { gap: 10px; margin-bottom: 12px; }
+  .header-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
+  .sync-note { font-size: .73rem; }
+  .portal { font-size: .76rem; padding: 5px 8px; }
+  .toolbar { flex-wrap: wrap; padding: 7px 6px; }
+  .period, .filter-toggle, .export-todo { font-size: .79rem; padding: 6px; }
+  .filters { padding: 0 8px 10px; gap: 7px; }
+  .filter-row { grid-template-columns: 3.5rem minmax(0, 1fr); }
+  .filter-label, .filter-choice, .filter-all { font-size: .77rem; }
+  .list-head, summary.task-row { grid-template-columns: minmax(0, 1fr) 82px 55px 9px; gap: 7px; padding-inline: 12px; }
+  html[data-show-grades="false"] :is(.list-head, summary.task-row) {
+    grid-template-columns: minmax(0, 1fr) 78px 9px;
+  }
+  .task-when { font-size: .76rem; overflow-wrap: anywhere; }
+  .deadline-alert { padding-inline: 3px; }
+  .task-grade { font-size: .7rem; }
+  .task-grade strong { font-size: .85rem; }
+  .task-brief { font-size: .86rem; }
+  .task-body { padding-inline: 12px; }
+}
+</style>
+</head>
+<body>
+<main class="page">
+  <header class="page-head">
+    <div>
+      <p class="calendar"><time datetime="${day}">${day_label}</time></p>
+      <h1>作业速览</h1>
+    </div>
+    <div class="header-actions">
+      <span class="sync-note">同步 <time datetime="${checked_iso}">${checked_time}</time></span>
+      <a class="portal" href="${school_url}">学校网站 <span aria-hidden="true">↗</span></a>
+    </div>
+  </header>
+  <section class="board" aria-label="任务列表">
+    <div class="toolbar">
+      <div class="dates" role="group" aria-label="按布置日期筛选">
+        <button type="button" class="period" data-period="today" aria-pressed="true">今天</button>
+        <button type="button" class="period" data-period="yesterday" aria-pressed="false">昨天</button>
+        <button type="button" class="period" data-period="3" aria-pressed="false">近 3 天</button>
+        <button type="button" class="period" data-period="7" aria-pressed="false">近 7 天</button>
+        <button type="button" class="period" data-period="month" aria-pressed="false">本月</button>
+      </div>
+      <div class="toolbar-actions">
+        <button type="button" id="filter-toggle" class="filter-toggle" aria-expanded="false" aria-controls="filters">筛选</button>
+        <button type="button" id="export-todo" class="export-todo" title="当前筛选没有待办" disabled>导出待办</button>
+      </div>
+    </div>
+    <div id="filters" class="filters" hidden>
+      <div class="filter-tools">
+        <label class="search"><span class="sr-only">搜索作业</span><input id="search" type="search" placeholder="搜索作业内容" autocomplete="off"></label>
+        <button type="button" class="filter-reset" id="filter-reset">重置</button>
+      </div>
+      <div class="filter-row" role="group" aria-labelledby="submission-label">
+        <span class="filter-label" id="submission-label">提交状态</span>
+        <div class="filter-options">
+          <label class="filter-choice"><input type="checkbox" name="status" value="unsubmitted">未提交</label>
+          <label class="filter-choice"><input type="checkbox" name="status" value="submitted">已提交</label>
+        </div>
+      </div>
+      <div class="filter-row" role="group" aria-labelledby="course-label">
+        <span class="filter-label" id="course-label">科目</span>
+        <div class="filter-options">${subjects}</div>
+      </div>
+      <div class="filter-row" role="group" aria-labelledby="view-label">
+        <span class="filter-label" id="view-label">任务类型</span>
+        <div class="filter-options">${views}<button type="button" class="filter-all" id="view-all" aria-pressed="false">全部</button></div>
+      </div>
+    </div>
+    <p id="results" class="sr-only" role="status"></p>
+    <div class="list-head" aria-hidden="true"><span>作业内容</span><span id="date-label">截止</span><span class="score-label">成绩</span><span></span></div>
+    <div id="tasks">${rows}</div>
+    <p id="empty" class="empty"${empty_hidden}>今天没有布置作业。</p>
+  </section>
+</main>
+<script>
+(() => {
+  const page = document.documentElement;
+  const list = document.querySelector('#tasks');
+  const rows = Array.from(list.children);
+  const periods = Array.from(document.querySelectorAll('[data-period]'));
+  const choices = Object.fromEntries(['status', 'course', 'view'].map(group => [
+    group, Array.from(document.querySelectorAll('input[name="' + group + '"]'))
+  ]));
+  const allViews = document.querySelector('#view-all');
+  const filters = document.querySelector('#filters');
+  const filterToggle = document.querySelector('#filter-toggle');
+  const exportTodo = document.querySelector('#export-todo');
+  const search = document.querySelector('#search');
+  const empty = document.querySelector('#empty');
+  const results = document.querySelector('#results');
+  const baseOrder = new Map(rows.map((row, index) => [row, index]));
+  const emptyText = {
+    pending: '没有待办。',
+    uncertain: '没有待确认的任务。',
+    records: '没有记录。',
+    grades: '没有已发布成绩。'
+  };
+  let scope = 'today';
+  let pendingRows = [];
+
+  function selected(group) {
+    return new Set(choices[group].filter(choice => choice.checked).map(choice => choice.value));
+  }
+
+  function select(group, values) {
+    for (const choice of choices[group]) choice.checked = values.includes(choice.value);
+  }
+
+  function belongs(row, views) {
+    return views.size === 0 ||
+      (views.has('homework') && row.dataset.homework === '1') ||
+      (views.has('pending') && row.dataset.pending === '1') ||
+      (views.has('grades') && row.dataset.grade === '1') ||
+      (views.has('records') && row.dataset.kind === 'record') ||
+      (views.has('uncertain') && row.dataset.kind === 'uncertain');
+  }
+
+  function inPeriod(row) {
+    if (scope === 'month') return true;
+    if (!row.dataset.date) return false;
+    const age = Number(row.dataset.age);
+    if (scope === 'today') return age === 0;
+    if (scope === 'yesterday') return age === 1;
+    return age >= 0 && age < Number(scope);
+  }
+
+  function dayLabel(row) {
+    if (!row.dataset.date) return '布置日期未注明';
+    const date = row.dataset.date.slice(5).replace('-', '/');
+    if (row.dataset.age === '0') return '今天 · ' + date;
+    if (row.dataset.age === '1') return '昨天 · ' + date;
+    return date;
+  }
+
+  function mdText(text) {
+    return text.trim().replace(/\s+/g, ' ').replace(/[\\*_~\[\]<>\x60]/g, char => '\\' + char);
+  }
+
+  function attachmentLinks(row) {
+    const links = [];
+    for (const item of row.querySelectorAll('.task-attachments li')) {
+      const file = item.querySelector('a');
+      const source = item.querySelector('.origin-link') || file;
+      if (!source || !['https:', 'http:'].includes(source.protocol)) continue;
+      const destination = source.href.replace(/[<>\s\\]/g, char => encodeURIComponent(char));
+      links.push('[' + mdText(file.textContent) + '](<' + destination + '>)');
+    }
+    return links;
+  }
+
+  function downloadTodo() {
+    if (!pendingRows.length) return;
+    const day = document.querySelector('.calendar time').dateTime;
+    const range = periods.find(button => button.dataset.period === scope).textContent;
+    const lines = ['# 作业待办', '', day + ' · ' + range + ' · ' + pendingRows.length + ' 项 · 北京时间'];
+    let previousDate = null;
+    for (const row of pendingRows) {
+      const date = row.dataset.date;
+      if (date !== previousDate) {
+        lines.push('', '## ' + (date || '布置日期未注明'), '');
+        previousDate = date;
+      }
+      const course = mdText(row.querySelector('.task-course').textContent);
+      const brief = mdText(row.querySelector('.task-brief').textContent);
+      const due = row.querySelector('time.due-when');
+      const deadline = due ? '截止 ' + due.dateTime.slice(0, 16).replace('T', ' ') : '截止未注明';
+      const overdue = due?.classList.contains('deadline-alert') ? '（逾期）' : '';
+      lines.push('- [ ] **' + course + '**：' + brief + ' · ' + deadline + overdue);
+      const method = row.querySelector('.submission-note');
+      if (method && !brief.includes(mdText(method.textContent))) {
+        lines.push('  - 怎么交：' + mdText(method.textContent));
+      }
+      const attachments = attachmentLinks(row);
+      if (attachments.length) lines.push('  - 附件：' + attachments.join('、'));
+    }
+    const file = new Blob([lines.join('\n') + '\n'], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = '作业待办-' + day + '.md';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function applyFilters() {
+    const q = search.value.trim().toLocaleLowerCase();
+    const courses = selected('course');
+    const views = selected('view');
+    const statuses = selected('status');
+    const homeworkOnly = views.size === 1 && views.has('homework');
+    const showAll = views.size === 0;
+    const ordered = rows.filter(row => (
+      (!courses.size || courses.has(row.dataset.subject)) &&
+      (!statuses.size || statuses.has(row.dataset.submission)) &&
+      inPeriod(row) && belongs(row, views) && (!q || row.dataset.search.includes(q))
+    ));
+    const visible = new Set(ordered);
+    for (const row of rows) row.hidden = !visible.has(row);
+    for (const button of periods) {
+      button.setAttribute('aria-pressed', String(button.dataset.period === scope));
+    }
+    const grouped = scope !== 'today' && scope !== 'yesterday';
+    for (const heading of list.querySelectorAll('.day-group')) heading.remove();
+    ordered.sort((a, b) => (
+      (grouped ? b.dataset.date.localeCompare(a.dataset.date) : 0) || baseOrder.get(a) - baseOrder.get(b)
+    ));
+    pendingRows = ordered.filter(row => row.dataset.pending === '1');
+    exportTodo.disabled = pendingRows.length === 0;
+    exportTodo.title = pendingRows.length ? '下载 ' + pendingRows.length + ' 项待办（.md）' : '当前筛选没有待办';
+    let previousDate = null;
+    for (const row of ordered) {
+      if (grouped && row.dataset.date !== previousDate) {
+        const heading = document.createElement('h2');
+        heading.className = 'day-group';
+        heading.textContent = dayLabel(row);
+        list.append(heading);
+        previousDate = row.dataset.date;
+      }
+      list.append(row);
+    }
+    const byRecordDate = !showAll && Array.from(views).every(view => view === 'grades' || view === 'records');
+    page.dataset.dateColumn = byRecordDate ? 'assigned' : 'due';
+    page.dataset.showGrades = String(showAll || views.has('grades') || views.has('records'));
+    allViews.setAttribute('aria-pressed', String(showAll));
+    document.querySelector('#date-label').textContent = byRecordDate ? '布置日期' : (showAll || views.has('records')) ? '时间' : '截止';
+    document.querySelector('.list-head > span').textContent = homeworkOnly ? '作业内容' : '任务';
+    document.querySelector('.list-head').hidden = visible.size === 0;
+    empty.hidden = visible.size > 0;
+    const noHomework = scope === 'today' ? '今天没有布置作业。' : scope === 'yesterday' ? '昨天没有布置作业。' : '这段时间没有布置作业。';
+    const narrowed = q || courses.size || statuses.size || views.size > 1;
+    empty.textContent = narrowed ? '没有符合条件的任务。'
+      : homeworkOnly ? noHomework : emptyText[Array.from(views)[0]] || '没有任务。';
+    filterToggle.dataset.active = narrowed || !homeworkOnly ? '1' : '0';
+    results.textContent = '显示 ' + visible.size + ' 项，待办 ' + pendingRows.length + ' 项';
+  }
+
+  function restore() {
+    const params = new URLSearchParams(location.hash.slice(1));
+    const savedViews = params.getAll('view');
+    const knownViews = savedViews.filter(value => choices.view.some(choice => choice.value === value));
+    select('view', savedViews.includes('all') ? [] : knownViews.length ? knownViews : ['homework']);
+    select('course', params.getAll('course'));
+    select('status', params.getAll('status'));
+    const savedScope = params.get('scope');
+    scope = periods.some(button => button.dataset.period === savedScope) ? savedScope : 'today';
+    search.value = params.get('q') || '';
+    applyFilters();
+  }
+
+  function save() {
+    const params = new URLSearchParams();
+    const views = selected('view');
+    if (views.size === 0) params.set('view', 'all');
+    else if (!(views.size === 1 && views.has('homework'))) {
+      for (const view of views) params.append('view', view);
+    }
+    for (const course of selected('course')) params.append('course', course);
+    for (const status of selected('status')) params.append('status', status);
+    if (scope !== 'today') params.set('scope', scope);
+    if (search.value.trim()) params.set('q', search.value.trim());
+    const hash = params.toString();
+    history.replaceState(null, '', hash ? '#' + hash : location.href.split('#')[0]);
+    applyFilters();
+  }
+
+  for (const button of periods) button.addEventListener('click', () => {
+    scope = button.dataset.period;
+    save();
+  });
+  filterToggle.addEventListener('click', () => {
+    filters.hidden = !filters.hidden;
+    filterToggle.setAttribute('aria-expanded', String(!filters.hidden));
+  });
+  exportTodo.addEventListener('click', downloadTodo);
+  for (const choice of Object.values(choices).flat()) choice.addEventListener('change', save);
+  allViews.addEventListener('click', () => {
+    select('view', []);
+    save();
+  });
+  document.querySelector('#filter-reset').addEventListener('click', () => {
+    select('view', ['homework']);
+    select('course', []);
+    select('status', []);
+    search.value = '';
+    save();
+  });
+  search.addEventListener('input', save);
+  window.addEventListener('hashchange', restore);
+  restore();
+  if (location.pathname.endsWith('/latest.html')) {
+    setInterval(() => {
+      if (!document.hidden && !document.querySelector('.task[open]') && !filters.contains(document.activeElement)) {
+        location.reload();
+      }
+    }, 60000);
+  }
+})();
+</script>
+</body>
+</html>
