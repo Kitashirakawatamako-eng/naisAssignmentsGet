@@ -24,6 +24,9 @@ struct AssignmentWindow: View {
                     Image(systemName: "exclamationmark.circle")
                     Text(issue).frame(maxWidth: .infinity, alignment: .leading)
                     if store.needsLogin { Button("登录设置") { store.settingsOpen = true } }
+                    else if let hint = store.syncRecoveryHint {
+                        Text(hint).foregroundStyle(.secondary).monospacedDigit()
+                    }
                 }
                 .font(.callout)
                 .padding(.horizontal, 22)

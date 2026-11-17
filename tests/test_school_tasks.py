@@ -1,5 +1,5 @@
 import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.client import IncompleteRead
 from pathlib import Path
 import sys
@@ -294,17 +294,30 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(client.get("/api/LearningTask/GetList"), {"list": []})
         self.assertEqual(client.opener.open.call_count, 2)
 
+    def test_connection_timeout_is_recoverable_without_retrying_login_post(self):
+        client = app.Client(fresh=True)
+        with patch.object(client.opener, "open", side_effect=app.urllib.error.URLError(TimeoutError())), \
+             patch.object(app.time, "sleep"):
+            with self.assertRaisesRegex(app.TemporarySyncError, "响应超时"):
+                client.get("/api/LearningTask/GetList")
+            self.assertEqual(client.opener.open.call_count, 3)
+            client.opener.open.reset_mock()
+            with self.assertRaises(app.TemporarySyncError):
+                client._json_request("/api/MemberShip/Login", {}, body={})
+            client.opener.open.assert_called_once()
+
     def test_respects_retry_after_without_immediate_requests(self):
-        client = app.Client.__new__(app.Client)
-        client.opener = MagicMock()
-        client.opener.open.side_effect = app.urllib.error.HTTPError(
-            app.BASE, 429, "Too many requests", {"Retry-After": "180"}, None)
-        with self.assertRaises(app.RateLimited) as caught:
-            client.get("/api/LearningTask/GetList")
-        self.assertEqual(caught.exception.retry_after, 180)
-        with self.assertRaises(app.RateLimited):
-            client.get("/api/LearningTask/GetList")
-        self.assertEqual(client.opener.open.call_count, 1)
+        for status in (429, 503):
+            with self.subTest(status=status):
+                client = app.Client(fresh=True)
+                error = app.urllib.error.HTTPError(app.BASE, status, "Retry later", {"Retry-After": "180"}, None)
+                with patch.object(client.opener, "open", side_effect=error) as request:
+                    with self.assertRaises(app.RateLimited) as caught:
+                        client.get("/api/LearningTask/GetList")
+                    self.assertEqual(caught.exception.retry_after, 180)
+                    with self.assertRaises(app.RateLimited):
+                        client.get("/api/LearningTask/GetList")
+                    request.assert_called_once()
 
     def test_exclude_old_tasks_and_extract_links(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -355,6 +368,49 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(polls, [0, 60])
             semester.assert_called_once()
 
+    def test_desktop_recovers_automatically_and_clears_retry_notice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, client = Path(tmp), FakeClient()
+            app.sync(client, root, NOW, write_html=False)
+            report = root / "reports/latest.json"
+            before = report.read_bytes()
+            clock = 100.0
+
+            def recover(now, **kwargs):
+                return app.sync(client, root, now, write_html=False)
+
+            with (patch.object(app, "ROOT", root),
+                  patch.object(app.time, "monotonic", side_effect=lambda: clock),
+                  patch.object(desktop_bridge, "datetime", wraps=datetime) as wall_clock,
+                  patch.object(desktop_bridge, "emit"),
+                  patch.object(app, "AttachmentWorker"),
+                  patch("builtins.print")):
+                wall_clock.now.return_value = NOW
+                backend = desktop_bridge.DesktopBackend()
+                backend.next_timetable = 1000.0
+                with patch.object(backend.session, "run",
+                                  side_effect=[app.TemporarySyncError("学校接口响应超时。")]) as request:
+                    backend.handle({"action": "poll", "automatic": True})
+                    clock += 14
+                    backend.handle({"action": "poll", "automatic": True})
+                    request.assert_called_once()
+                self.assertEqual(report.read_bytes(), before)
+                self.assertIsNotNone(desktop_bridge.snapshot(root)["retry_at"])
+                self.assertEqual(backend.next_check, 115.0)
+
+                clock += 1
+                wall_clock.now.return_value = NOW + timedelta(seconds=15)
+                with patch.object(backend.session, "run", side_effect=recover) as request:
+                    backend.handle({"action": "poll", "automatic": False})
+                    request.assert_not_called()
+                    backend.handle({"action": "poll", "automatic": True})
+                    request.assert_called_once()
+
+            result = desktop_bridge.snapshot(root)
+            self.assertIsNone(result["sync_error"])
+            self.assertIsNone(result["retry_at"])
+            self.assertNotEqual(report.read_bytes(), before)
+
     def test_detail_only_edit_is_seen_after_cache_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, client = Path(tmp), FakeClient()
@@ -364,6 +420,31 @@ class SyncTests(unittest.TestCase):
             result = app.sync(client, root, NOW.replace(minute=31))
             self.assertEqual(result["changes"], 1)
             self.assertIn("做第 7 题", Path(result["report"]).read_text())
+
+    def test_failed_detail_is_retried_before_its_cache_expires(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, client = Path(tmp), FakeClient()
+            app.sync(client, root, NOW, write_html=False)
+            saved = root / "reports/latest.json"
+            original_get = client.get
+
+            def interrupt_detail(path, **params):
+                if path.endswith("GetDetail"):
+                    raise app.TemporarySyncError("学校接口响应超时。")
+                return original_get(path, **params)
+
+            with patch.object(client, "get", side_effect=interrupt_detail):
+                app.sync(client, root, NOW + timedelta(minutes=1), refresh_details=True, write_html=False)
+            task = app.load_json(saved, {})["tasks"][0]
+            self.assertTrue(task["detail_pending"])
+            self.assertIn("第 5 页", task["content"])
+
+            client.detail["content"] = "更新为完成第 8 页。"
+            app.sync(client, root, NOW + timedelta(minutes=2), write_html=False)
+            task = app.load_json(saved, {})["tasks"][0]
+            self.assertFalse(task["detail_pending"])
+            self.assertIn("第 8 页", task["content"])
+            self.assertEqual(client.detail_requests, ["task/1", "task/1"])
 
     def test_grade_publish_change_and_withdrawal(self):
         with tempfile.TemporaryDirectory() as tmp:
