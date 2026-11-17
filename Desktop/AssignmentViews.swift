@@ -40,7 +40,7 @@ struct AssignmentWindow: View {
                     .background(panel)
             } detail: {
                 Group {
-                    if let task = rows.first(where: { $0.id == store.selectedID }) {
+                    if let task = (store.pinnedTasks + rows).first(where: { $0.id == store.selectedID }) {
                         TaskDetail(task: task, store: store).id(task.id)
                     } else {
                         Placeholder(icon: "doc.text.magnifyingglass", title: "作业详情", subtitle: "选中一项作业查看。")
@@ -140,12 +140,13 @@ struct AssignmentWindow: View {
                     Button("登录学校账号") { store.settingsOpen = true }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if rows.isEmpty {
+            } else if rows.isEmpty && store.pinnedTasks.isEmpty {
                 Placeholder(icon: "tray", title: store.snapshot.tasks.isEmpty ? "还没有作业记录" : "没有符合条件的作业",
                             subtitle: store.snapshot.tasks.isEmpty ? "点「立即同步」读取学校任务。" : "试试其他日期或调整筛选。")
             } else {
-                let pinned = rows.filter { store.pinnedIDs.contains($0.id) }
-                let other = rows.filter { !store.pinnedIDs.contains($0.id) }
+                let pinned = store.pinnedTasks
+                let shown = Set(pinned.map(\.id))
+                let other = rows.filter { !shown.contains($0.id) }
                 List(selection: $store.selectedID) {
                     if !pinned.isEmpty {
                         Section("置顶") {
@@ -166,11 +167,11 @@ struct AssignmentWindow: View {
     }
 
     private func assignmentRow(_ task: Assignment) -> some View {
-        TaskListRow(task: task, now: store.now)
+        TaskListRow(task: task, now: store.now, pin: store.pinState(task.id))
             .tag(task.id)
             .listRowInsets(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
             .accessibilityElement(children: .combine)
-            .contextMenu { PinAssignmentButton(task: task, store: store) }
+            .contextMenu { PinMenu(task: task, store: store) }
     }
 
     private func footer(count: Int, pending: Int) -> some View {
@@ -198,16 +199,35 @@ struct AssignmentWindow: View {
     }
 }
 
-private struct PinAssignmentButton: View {
+private struct PinMenu: View {
     let task: Assignment
     @ObservedObject var store: AssignmentStore
 
     var body: some View {
-        let pinned = store.pinnedIDs.contains(task.id)
-        Button {
-            store.togglePin(task.id)
+        let state = store.pinState(task.id)
+        Menu {
+            Toggle("全局置顶", isOn: choice(.global, state))
+            Toggle("仅当前筛选", isOn: choice(.filtered, state))
+            if state != nil {
+                Divider()
+                Button { store.unpin(task.id) } label: {
+                    Label("取消置顶", systemImage: "pin.slash")
+                }
+            }
         } label: {
-            Label(pinned ? "取消置顶" : "置顶", systemImage: pinned ? "pin.slash" : "pin")
+            Label(state == nil ? "置顶" : "已置顶", systemImage: state == .global ? "pin.fill" : "pin")
+        }
+    }
+
+    private func choice(_ scope: AssignmentStore.PinScope, _ state: AssignmentStore.PinScope?) -> Binding<Bool> {
+        Binding {
+            state == scope
+        } set: { on in
+            if on {
+                store.setPin(task.id, scope: scope)
+            } else if store.pinState(task.id) == scope {
+                store.unpin(task.id)
+            }
         }
     }
 }
@@ -215,15 +235,24 @@ private struct PinAssignmentButton: View {
 private struct TaskListRow: View {
     let task: Assignment
     let now: Date
+    var pin: AssignmentStore.PinScope? = nil
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(task.subject + " · " + task.status)
-                    .font(.caption)
-                    .foregroundStyle(prominence == .increased ? Color.white : Color.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    if let pin {
+                        Image(systemName: pin == .global ? "pin.fill" : "pin")
+                            .font(.system(size: 9))
+                            .foregroundStyle(prominence == .increased ? Color.white : jade)
+                            .help(pin == .global ? "全局置顶" : "筛选内置顶")
+                    }
+                    Text(task.subject + " · " + task.status)
+                        .font(.caption)
+                        .foregroundStyle(prominence == .increased ? Color.white : Color.secondary)
+                        .lineLimit(1)
+                }
                 Text(task.brief)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(3)
@@ -269,7 +298,7 @@ private struct TaskDetail: View {
                     HStack {
                         Text(task.subject).font(.subheadline.weight(.semibold)).foregroundStyle(jade)
                         Spacer()
-                        PinAssignmentButton(task: task, store: store)
+                        PinMenu(task: task, store: store)
                     }
                     Text(task.title).font(.system(size: 23, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
