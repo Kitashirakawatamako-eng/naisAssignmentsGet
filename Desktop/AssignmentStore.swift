@@ -27,6 +27,9 @@ final class AssignmentStore: ObservableObject {
     @Published var floatingTimetable: Bool {
         didSet { defaults.set(floatingTimetable, forKey: "floatingTimetable") }
     }
+    @Published private(set) var pinnedIDs: Set<String> {
+        didSet { defaults.set(pinnedIDs.sorted(), forKey: "pinnedAssignments") }
+    }
     @Published var selectedID: String?
     @Published var settingsOpen = false
     @Published var schoolLoginOpen = false
@@ -59,6 +62,7 @@ final class AssignmentStore: ObservableObject {
         filters = data.flatMap { try? JSONDecoder().decode(AssignmentFilters.self, from: $0) } ?? AssignmentFilters()
         automatic = UserDefaults.standard.object(forKey: "automatic") as? Bool ?? true
         floatingTimetable = UserDefaults.standard.object(forKey: "floatingTimetable") as? Bool ?? (resources == nil)
+        pinnedIDs = Set(UserDefaults.standard.stringArray(forKey: "pinnedAssignments") ?? [])
         if let cached = try? Data(contentsOf: root.appendingPathComponent("data/timetable.json")) {
             snapshot.timetable = try? Self.backendDecoder().decode(Timetable.self, from: cached)
         }
@@ -66,6 +70,15 @@ final class AssignmentStore: ObservableObject {
 
     var rows: [Assignment] { filters.apply(to: snapshot.tasks, now: now) }
     var pendingCount: Int { rows.filter(\.pending).count }
+
+    func togglePin(_ id: String) {
+        if pinnedIDs.contains(id) {
+            pinnedIDs.remove(id)
+        } else {
+            pinnedIDs.insert(id)
+        }
+    }
+
     var needsSetup: Bool { !loading && !snapshot.hasSession && !snapshot.autoLogin }
     var currentLesson: SchoolLesson? { snapshot.timetable?.current(at: now) }
     var nextLesson: SchoolLesson? { snapshot.timetable?.next(after: now) }

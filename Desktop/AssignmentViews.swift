@@ -144,15 +144,17 @@ struct AssignmentWindow: View {
                 Placeholder(icon: "tray", title: store.snapshot.tasks.isEmpty ? "还没有作业记录" : "没有符合条件的作业",
                             subtitle: store.snapshot.tasks.isEmpty ? "点「立即同步」读取学校任务。" : "试试其他日期或调整筛选。")
             } else {
+                let pinned = rows.filter { store.pinnedIDs.contains($0.id) }
+                let other = rows.filter { !store.pinnedIDs.contains($0.id) }
                 List(selection: $store.selectedID) {
-                    ForEach(TaskDay.groups(rows)) { day in
+                    if !pinned.isEmpty {
+                        Section("置顶") {
+                            ForEach(pinned) { task in assignmentRow(task) }
+                        }
+                    }
+                    ForEach(TaskDay.groups(other)) { day in
                         Section(day.label) {
-                            ForEach(day.tasks) { task in
-                                TaskListRow(task: task, now: store.now)
-                                    .tag(task.id)
-                                    .listRowInsets(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
-                                    .accessibilityElement(children: .combine)
-                            }
+                            ForEach(day.tasks) { task in assignmentRow(task) }
                         }
                     }
                 }
@@ -161,6 +163,14 @@ struct AssignmentWindow: View {
                 .accessibilityLabel("作业列表")
             }
         }
+    }
+
+    private func assignmentRow(_ task: Assignment) -> some View {
+        TaskListRow(task: task, now: store.now)
+            .tag(task.id)
+            .listRowInsets(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
+            .accessibilityElement(children: .combine)
+            .contextMenu { PinAssignmentButton(task: task, store: store) }
     }
 
     private func footer(count: Int, pending: Int) -> some View {
@@ -185,6 +195,20 @@ struct AssignmentWindow: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 22)
         .frame(height: 32)
+    }
+}
+
+private struct PinAssignmentButton: View {
+    let task: Assignment
+    @ObservedObject var store: AssignmentStore
+
+    var body: some View {
+        let pinned = store.pinnedIDs.contains(task.id)
+        Button {
+            store.togglePin(task.id)
+        } label: {
+            Label(pinned ? "取消置顶" : "置顶", systemImage: pinned ? "pin.slash" : "pin")
+        }
     }
 }
 
@@ -242,7 +266,11 @@ private struct TaskDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 19) {
                 VStack(alignment: .leading, spacing: 9) {
-                    Text(task.subject).font(.subheadline.weight(.semibold)).foregroundStyle(jade)
+                    HStack {
+                        Text(task.subject).font(.subheadline.weight(.semibold)).foregroundStyle(jade)
+                        Spacer()
+                        PinAssignmentButton(task: task, store: store)
+                    }
                     Text(task.title).font(.system(size: 23, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
                     Text(task.status)
