@@ -27,6 +27,9 @@ final class AssignmentStore: ObservableObject {
     @Published var floatingTimetable: Bool {
         didSet { defaults.set(floatingTimetable, forKey: "floatingTimetable") }
     }
+    @Published private(set) var pinnedIDs: Set<String> {
+        didSet { defaults.set(pinnedIDs.sorted(), forKey: "pinnedAssignments") }
+    }
     @Published var selectedID: String?
     @Published var settingsOpen = false
     @Published var schoolLoginOpen = false
@@ -59,6 +62,7 @@ final class AssignmentStore: ObservableObject {
         filters = data.flatMap { try? JSONDecoder().decode(AssignmentFilters.self, from: $0) } ?? AssignmentFilters()
         automatic = UserDefaults.standard.object(forKey: "automatic") as? Bool ?? true
         floatingTimetable = UserDefaults.standard.object(forKey: "floatingTimetable") as? Bool ?? (resources == nil)
+        pinnedIDs = Set(UserDefaults.standard.stringArray(forKey: "pinnedAssignments") ?? [])
         if let cached = try? Data(contentsOf: root.appendingPathComponent("data/timetable.json")) {
             snapshot.timetable = try? Self.backendDecoder().decode(Timetable.self, from: cached)
         }
@@ -66,6 +70,15 @@ final class AssignmentStore: ObservableObject {
 
     var rows: [Assignment] { filters.apply(to: snapshot.tasks, now: now) }
     var pendingCount: Int { rows.filter(\.pending).count }
+
+    func togglePin(_ id: String) {
+        if pinnedIDs.contains(id) {
+            pinnedIDs.remove(id)
+        } else {
+            pinnedIDs.insert(id)
+        }
+    }
+
     var needsSetup: Bool { !loading && !snapshot.hasSession && !snapshot.autoLogin }
     var currentLesson: SchoolLesson? { snapshot.timetable?.current(at: now) }
     var nextLesson: SchoolLesson? { snapshot.timetable?.next(after: now) }
@@ -78,10 +91,23 @@ final class AssignmentStore: ObservableObject {
         }
     }
 
-    var inSchedule: Bool {
-        let parts = Beijing.calendar.dateComponents([.weekday, .hour, .minute], from: now)
+    var inSchedule: Bool { Self.inSchedule(at: now) }
+
+    private static func inSchedule(at date: Date) -> Bool {
+        let parts = Beijing.calendar.dateComponents([.weekday, .hour, .minute], from: date)
         guard let weekday = parts.weekday, let hour = parts.hour, let minute = parts.minute else { return false }
         return (2...6).contains(weekday) && ((8..<20).contains(hour) || (hour == 20 && minute == 0))
+    }
+
+    var syncRecoveryHint: String? {
+        guard !needsLogin, let retry = Beijing.parse(snapshot.retryAt) else { return nil }
+        if working == "sync" { return "正在重试…" }
+        if !automatic { return "自动重试已暂停" }
+        if !inSchedule || !Self.inSchedule(at: max(now, retry)) { return "将在同步时段重试" }
+        let seconds = retry.timeIntervalSince(now)
+        if seconds <= 0 { return "等待自动重试" }
+        if seconds < 60 { return "约 \(Int(seconds.rounded(.up))) 秒后自动重试" }
+        return "预计 \(Beijing.clock(retry)) 自动重试"
     }
 
     var lastSync: String {

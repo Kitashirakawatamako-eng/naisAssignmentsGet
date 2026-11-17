@@ -1,5 +1,5 @@
 """Local JSON pipe between the Mac app and the existing school sync engine."""
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 import sys
@@ -58,6 +58,7 @@ def snapshot(root):
         "auto_login": settings.get("enabled") is True,
         "has_session": (root / ".private/session.json").is_file(),
         "sync_error": desktop_error(status.get("error")),
+        "retry_at": status.get("retry_at"),
         "requires_login": bool(status.get("requires_login")),
         "timetable": school.load_json(root / TIMETABLE_FILE, None),
     }
@@ -87,12 +88,22 @@ class DesktopBackend:
         self.login_block = None
         self.next_timetable = 0.0
         self.timetable_login_block = None
+        self.timetable_failures = 0
+        now = datetime.now(school.TZ)
+        try:
+            status = school.load_json(self.root / "data/status.json", {})
+        except (OSError, ValueError):
+            status = {}
+        if isinstance(status, dict) and (retry_at := school.due_date(status.get("retry_at"))):
+            self.failures = 1
+            self.next_check = time.monotonic() + max(0, (retry_at - now).total_seconds())
+            if status.get("server_wait"):
+                self.rate_limit_until = self.next_check
         try:
             timetable = school.load_json(self.root / TIMETABLE_FILE, {})
         except (OSError, ValueError):
             timetable = {}
         if isinstance(timetable, dict):
-            now = datetime.now(school.TZ)
             checked = school.due_date(timetable.get("checked_at"))
             if checked and timetable.get("start_day") == week_start(now.date()).isoformat():
                 age = (now - checked).total_seconds()
@@ -123,6 +134,10 @@ class DesktopBackend:
             return False
         return self.timetable_login_block != (school.session_stamp(),)
 
+    def wait_for_server(self, exc):
+        cached_until = self.session.client.rate_limit_until if self.session.client else 0.0
+        self.rate_limit_until = max(self.rate_limit_until, cached_until, time.monotonic() + exc.retry_after)
+
     def synchronize_timetable(self, now):
         started = time.monotonic()
         if started < self.rate_limit_until:
@@ -138,14 +153,19 @@ class DesktopBackend:
             self.timetable_login_block = (school.session_stamp(),)
             raise
         except school.RateLimited as exc:
-            self.rate_limit_until = time.monotonic() + exc.retry_after
+            self.wait_for_server(exc)
             self.next_timetable = self.rate_limit_until
+            raise
+        except school.TemporarySyncError:
+            self.timetable_failures += 1
+            self.next_timetable = time.monotonic() + school.recovery_delay(self.timetable_failures)
             raise
         except (school.SyncError, OSError, ValueError):
             self.next_timetable = time.monotonic() + 5 * 60
             raise
         else:
             self.timetable_login_block = None
+            self.timetable_failures = 0
             self.next_timetable = time.monotonic() + REFRESH_SECONDS
 
     def synchronize(self, now, *, manual):
@@ -166,12 +186,18 @@ class DesktopBackend:
             raise
         except (school.SyncError, OSError, ValueError) as exc:
             self.failures += 1
-            delay = min(900, school.POLL_SECONDS * 2 ** min(self.failures - 1, 4))
             if isinstance(exc, school.RateLimited):
-                self.rate_limit_until = time.monotonic() + exc.retry_after
-                delay = max(delay, exc.retry_after)
-            self.next_check = time.monotonic() + delay
-            school.record_failure(exc)
+                self.wait_for_server(exc)
+                self.next_check = self.rate_limit_until
+            elif isinstance(exc, school.TemporarySyncError):
+                self.next_check = time.monotonic() + school.recovery_delay(self.failures)
+            else:
+                self.next_check = time.monotonic() + min(900, school.POLL_SECONDS * 2 ** min(self.failures - 1, 4))
+            retry_at = None
+            if isinstance(exc, (school.TemporarySyncError, school.RateLimited)):
+                remaining = max(0, self.next_check - time.monotonic())
+                retry_at = datetime.now(school.TZ) + timedelta(seconds=remaining + 1)
+            school.record_failure(exc, retry_at=retry_at)
             raise
         else:
             self.failures = 0
@@ -186,15 +212,18 @@ class DesktopBackend:
         try:
             if action == "poll":
                 self.update_snapshot()
-                if request.get("automatic") and self.timetable_due():
-                    operation = "timetable"
-                    self.synchronize_timetable(now)
-                elif request.get("automatic") and self.should_poll(now):
-                    try:
-                        with school.lock(self.root, "watch"):
-                            self.synchronize(now, manual=False)
-                    except school.SyncBusy:
-                        self.next_check = time.monotonic() + 5
+                if request.get("automatic"):
+                    timetable_due = self.timetable_due()
+                    if self.should_poll(now) and (self.failures or not timetable_due):
+                        operation = "sync"
+                        try:
+                            with school.lock(self.root, "watch"):
+                                self.synchronize(now, manual=False)
+                        except school.SyncBusy:
+                            self.next_check = time.monotonic() + 5
+                    elif timetable_due:
+                        operation = "timetable"
+                        self.synchronize_timetable(now)
             elif action == "sync":
                 self.synchronize(now, manual=True)
             elif action == "timetable":
