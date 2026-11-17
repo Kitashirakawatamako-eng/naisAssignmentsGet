@@ -71,6 +71,7 @@ def build_app(stage, runtime, architecture):
     native.mkdir(parents=True)
     resources.mkdir()
     shutil.copyfile(SOURCE / "Desktop/Info.plist", contents / "Info.plist")
+    shutil.copyfile(SOURCE / "Desktop/AppIcon.icns", resources / "AppIcon.icns")
     backend = resources / "Backend"
     backend.mkdir()
     for name in BACKEND_FILES:
@@ -82,12 +83,10 @@ def build_app(stage, runtime, architecture):
 
     print("正在编译 Mac 应用…", flush=True)
     cache = stage / "SwiftModules"
-    icon = SOURCE / "Desktop/draw_icon.swift"
-    sources = sorted(path for path in (SOURCE / "Desktop").glob("*.swift") if path != icon)
+    sources = sorted((SOURCE / "Desktop").glob("*.swift"))
     run("/usr/bin/xcrun", "swiftc", "-O", "-swift-version", "5", "-parse-as-library",
         "-target", f"{architecture}-apple-macosx14.0", "-module-cache-path", cache,
         *sources, "-o", native / "AssignmentDesktop")
-    run("/usr/bin/xcrun", "swift", "-module-cache-path", cache, icon, resources / "AppIcon.icns")
     run("/usr/bin/codesign", "--force", "--sign", "-", bundle)
     run("/usr/bin/codesign", "--verify", "--deep", "--strict", bundle)
     return bundle
