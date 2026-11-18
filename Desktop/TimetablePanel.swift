@@ -45,7 +45,7 @@ final class TimetablePanelController: NSObject, NSWindowDelegate {
             contentRect: NSRect(origin: .zero, size: Self.size),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
         )
-        window.title = "课表小窗"
+        window.title = "Floating Timetable"
         window.identifier = NSUserInterfaceItemIdentifier("floating-timetable")
         window.isFloatingPanel = true
         window.level = .floating
@@ -107,18 +107,18 @@ private struct TimetablePanelCard: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 7) {
                 ZStack(alignment: .leading) {
-                    Label("课表", systemImage: "calendar").font(.caption.weight(.semibold)).foregroundStyle(jade)
+                    Label("Timetable", systemImage: "calendar").font(.caption.weight(.semibold)).foregroundStyle(jade)
                     PanelDragArea().accessibilityHidden(true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                panelButton("打开完整课表", icon: "arrow.up.right", action: openTimetable)
-                panelButton("隐藏课表小窗", icon: "xmark") { store.floatingTimetable = false }
+                panelButton("Open Full Timetable", icon: "arrow.up.right", action: openTimetable)
+                panelButton("Hide Floating Timetable", icon: "xmark") { store.floatingTimetable = false }
             }
             .frame(height: 20)
-            lessonRow("本节", lesson: store.currentLesson, empty: store.timetableCoversToday ? "当前无课" : "等待课表")
+            lessonRow("Now", lesson: store.currentLesson, empty: store.timetableCoversToday ? "No class now" : "Waiting for timetable")
             Divider()
-            lessonRow("下节", lesson: store.nextLesson,
-                      empty: store.timetableCoversToday ? "暂无安排" : "打开课表查看")
+            lessonRow("Next", lesson: store.nextLesson,
+                      empty: store.timetableCoversToday ? "No more classes" : "Open timetable to check")
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

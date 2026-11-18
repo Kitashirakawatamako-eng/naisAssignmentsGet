@@ -44,8 +44,8 @@ struct AssignmentSplit<Sidebar: View, Detail: View>: View {
                             }
                     )
                     .accessibilityElement()
-                    .accessibilityLabel("调整作业列表宽度")
-                    .accessibilityValue("\(Int(width)) 点")
+                    .accessibilityLabel("Resize assignment list")
+                    .accessibilityValue("\(Int(width)) points")
                     .accessibilityAdjustableAction { direction in
                         switch direction {
                         case .increment: preferredWidth = (fixedWidth + 24).clamped(to: minimum...maximum)

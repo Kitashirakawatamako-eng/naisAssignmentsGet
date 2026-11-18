@@ -52,7 +52,7 @@ HTTP_LINK = re.compile(r"""(?:https?://|(?<!:)//)[^\s<>"'，。；、！？（�
 
 def translation_model(root):
     bundled = os.environ.get("SP_ASSIGNMENTS_MODEL_DIR")
-    return Path(bundled) if bundled else root / ".models/en-zh"
+    return Path(bundled) if bundled else root / ".models/zh-en"
 
 
 class SyncError(Exception):

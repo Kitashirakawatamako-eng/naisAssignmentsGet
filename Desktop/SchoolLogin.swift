@@ -11,13 +11,13 @@ struct SchoolLoginSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("学校登录").font(.headline)
-                    Text("在学校页面完成登录，再点「保存登录」。")
+                    Text("School Login").font(.headline)
+                    Text("Sign in on the school website, then click Save Login.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(store.working == "verify" ? "正在验证…" : "保存登录") {
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(store.working == "verify" ? "Verifying…" : "Save Login") {
                     store.saveBrowserSession(cookies)
                 }
                 .disabled(cookies.isEmpty || store.requesting)
@@ -90,7 +90,7 @@ private struct SchoolLoginPage: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             if (error as NSError).code != NSURLErrorCancelled {
-                fail("学校登录页加载失败。请检查网络后重新打开登录窗口。")
+                fail("Could not load the school login page. Check your connection and reopen the login window.")
             }
         }
     }

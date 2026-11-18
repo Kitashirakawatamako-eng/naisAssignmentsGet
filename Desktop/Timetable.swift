@@ -15,11 +15,11 @@ struct SchoolLesson: Decodable, Identifiable {
 
     var menuTitle: String {
         let knownNames = [
-            "AP商务与个人理财": "AP商务",
-            "AP环境科学": "AP环境",
+            "AP商务与个人理财": "AP Business",
+            "AP环境科学": "AP Environmental Science",
             "周二美国计算机联盟ACSL竞赛": "ACSL",
             "周四ACSL美国计算机联盟竞赛": "ACSL",
-            "高中体育 （羽毛球）": "体育",
+            "高中体育 （羽毛球）": "PE",
         ]
         let name = knownNames[title] ?? title
         return name.count <= 9 ? name : String(name.prefix(8)) + "…"
@@ -57,12 +57,12 @@ struct Timetable: Decodable {
 }
 
 enum DeskPage: String, CaseIterable, Identifiable {
-    case assignments = "作业", timetable = "课表"
+    case assignments = "Assignments", timetable = "Timetable"
     var id: Self { self }
 }
 
 enum TimetableRange: String, CaseIterable, Identifiable {
-    case today = "今天", thisWeek = "本周", nextWeek = "下周"
+    case today = "Today", thisWeek = "This Week", nextWeek = "Next Week"
     var id: Self { self }
 
     func days(relativeTo now: Date) -> [Date] {

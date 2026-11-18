@@ -1,4 +1,4 @@
-"""Compile and install 作业速览 for the current Mac."""
+"""Compile and install Assignment Overview for the current Mac."""
 from argparse import ArgumentParser
 from hashlib import file_digest
 from pathlib import Path
@@ -12,6 +12,8 @@ from zipfile import ZipFile
 
 SOURCE = Path(__file__).resolve().parents[1]
 APP_ID = "local.spassignments.desktop"
+APP_NAME = "Assignment Overview"
+LEGACY_APP_NAME = "作业速览"
 BACKEND_FILES = (
     "desktop_bridge.py", "school_tasks.py", "school_keychain.py", "school_timetable.py",
     "task_records.py", "task_report.py", "report_template.html",
@@ -20,7 +22,7 @@ MODEL_FILES = (
     "README.md", "metadata.json", "sentencepiece.model",
     "model/config.json", "model/shared_vocabulary.json", "model/model.bin",
 )
-MODEL_SHA256 = "433e7c4f034d87fbe2353161e05f18646d7999452f801a4e1f0378522b9850ab"
+MODEL_SHA256 = "62e7af5a3a48b530e47b7b3e5c78c2de79073ecd815750d2bf3ab35b4a67da2d"
 
 
 def run(*args, **kwargs):
@@ -28,17 +30,17 @@ def run(*args, **kwargs):
 
 
 def install_model(folder, archive):
-    print("正在下载英译中模型…", flush=True)
+    print("Downloading the Chinese-to-English translation model…", flush=True)
     run("/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--retry", 2,
-        "--max-time", 240, "https://argos-net.com/v1/translate-en_zh-1_9.argosmodel", "-o", archive)
+        "--max-time", 240, "https://argos-net.com/v1/translate-zh_en-1_9.argosmodel", "-o", archive)
     with archive.open("rb") as handle:
         if file_digest(handle, "sha256").hexdigest() != MODEL_SHA256:
-            raise ValueError("英译中模型校验失败，安装已停止。")
+            raise ValueError("Translation model checksum failed; installation stopped.")
     with ZipFile(archive) as model:
         for name in MODEL_FILES:
             target = folder / name
             target.parent.mkdir(parents=True, exist_ok=True)
-            with model.open("translate-en_zh-1_9/" + name) as before, target.open("wb") as after:
+            with model.open("translate-zh_en-1_9/" + name) as before, target.open("wb") as after:
                 shutil.copyfileobj(before, after)
 
 
@@ -46,7 +48,7 @@ def install_runtime(source_runtime, runtime):
     shutil.copytree(source_runtime, runtime, symlinks=True)
     library = runtime / "lib/python3.13"
     packages = library / "site-packages"
-    print("正在安装翻译依赖…", flush=True)
+    print("Installing translation dependencies…", flush=True)
     run(sys.executable, "-I", "-B", "-m", "pip", "--isolated", "install", "--disable-pip-version-check",
         "--no-cache-dir", "--no-compile", "--only-binary=:all:", "--index-url", "https://pypi.org/simple",
         "--target", packages, "-r", SOURCE / "requirements.txt")
@@ -64,7 +66,7 @@ def install_runtime(source_runtime, runtime):
 
 
 def build_app(stage, runtime, architecture):
-    bundle = stage / "作业速览.app"
+    bundle = stage / f"{APP_NAME}.app"
     contents = bundle / "Contents"
     native = contents / "MacOS"
     resources = contents / "Resources"
@@ -72,16 +74,18 @@ def build_app(stage, runtime, architecture):
     resources.mkdir()
     shutil.copyfile(SOURCE / "Desktop/Info.plist", contents / "Info.plist")
     shutil.copyfile(SOURCE / "Desktop/AppIcon.icns", resources / "AppIcon.icns")
+    for localization in (SOURCE / "Desktop").glob("*.lproj"):
+        shutil.copytree(localization, resources / localization.name)
     backend = resources / "Backend"
     backend.mkdir()
     for name in BACKEND_FILES:
         shutil.copyfile(SOURCE / "backend" / name, backend / name)
-    shutil.copyfile(SOURCE / "scripts/THIRD_PARTY.md", resources / "第三方组件.md")
-    install_model(resources / "Models/en-zh", stage / "model.zip")
+    shutil.copyfile(SOURCE / "scripts/THIRD_PARTY.md", resources / "Third-Party Components.md")
+    install_model(resources / "Models/zh-en", stage / "model.zip")
     (resources / "Python").mkdir()
     install_runtime(runtime, resources / "Python" / architecture)
 
-    print("正在编译 Mac 应用…", flush=True)
+    print("Building the macOS app…", flush=True)
     cache = stage / "SwiftModules"
     sources = sorted((SOURCE / "Desktop").glob("*.swift"))
     run("/usr/bin/xcrun", "swiftc", "-O", "-swift-version", "5", "-parse-as-library",
@@ -113,16 +117,16 @@ guard apps.allSatisfy(\.isTerminated) else { exit(2) }
 
 def install_app(bundle, destination, stage):
     if destination.is_symlink():
-        raise ValueError("「应用程序」已有同名替身，请移开后再安装。")
+        raise ValueError("A same-named alias already exists in Applications. Move it and try again.")
     previous = stage / "previous.app"
     if destination.exists():
         path = destination / "Contents/Info.plist"
         if not path.is_file() or plistlib.loads(path.read_bytes()).get("CFBundleIdentifier") != APP_ID:
-            raise ValueError("「应用程序」已有其他同名应用，请移开后再安装。")
+            raise ValueError("A different app with this name already exists in Applications. Move it and try again.")
         try:
             quit_installed_app(destination, stage)
         except subprocess.CalledProcessError:
-            raise ValueError("旧版仍在运行，请退出作业速览后重新安装。") from None
+            raise ValueError("The previous version is still running. Quit Assignment Overview and try again.") from None
         destination.rename(previous)
     try:
         bundle.rename(destination)
@@ -140,13 +144,28 @@ def main():
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args()
     apps = args.app_dir.expanduser().resolve()
-    destination = apps / "作业速览.app"
+    destination = apps / f"{APP_NAME}.app"
     apps.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".sp-install-", dir=apps) as stage:
         stage = Path(stage)
         bundle = build_app(stage, args.runtime.resolve(), args.architecture)
-        install_app(bundle, destination, stage)
-    print(f"安装完成。{destination}", flush=True)
+        legacy = apps / f"{LEGACY_APP_NAME}.app"
+        archived_legacy = stage / "previous-legacy.app"
+        if legacy.exists() and not destination.exists():
+            legacy_info = legacy / "Contents/Info.plist"
+            if legacy_info.is_file() and plistlib.loads(legacy_info.read_bytes()).get("CFBundleIdentifier") == APP_ID:
+                try:
+                    quit_installed_app(legacy, stage)
+                except subprocess.CalledProcessError:
+                    raise ValueError("The previous version is still running. Quit it and try again.") from None
+                legacy.rename(archived_legacy)
+        try:
+            install_app(bundle, destination, stage)
+        except OSError:
+            if archived_legacy.exists() and not legacy.exists():
+                archived_legacy.rename(legacy)
+            raise
+    print(f"Installation complete. {destination}", flush=True)
     if not args.no_open:
         run("/usr/bin/open", destination)
 
@@ -155,4 +174,4 @@ if __name__ == "__main__":
     try:
         main()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        sys.exit(f"安装失败。{error}")
+        sys.exit(f"Installation failed. {error}")

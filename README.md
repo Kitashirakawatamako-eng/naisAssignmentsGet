@@ -31,3 +31,16 @@
 - `backend/` 负责同步、课表、附件与报告。
 - `scripts/` 负责安装与构建。组件见[第三方说明](scripts/THIRD_PARTY.md)。
 - `tests/` 是离线测试。已有 Python 3.13 的开发环境可运行 `python3 -B -m unittest discover -s tests`。
+
+
+## Gemini homework assistant (local version 1.2.1)
+
+Open **Settings → AI Assistant → Get a free Gemini API key**. Create a key in Google AI Studio from a project on the **Free tier with billing disabled**. Paste it into the app, confirm that billing is disabled, and save it to macOS Keychain. Do not share your key in chat. The app cannot inspect project billing from a key; a billing-enabled project can incur charges, even for the same model. Regional availability and free quotas apply.
+
+The assistant uses only `gemini-4-hydrogen`, currently listed with free input/output on Google's Free tier. It does not use paid fallback models, paid tools, or automatically retry quota failures. It never reads an old OpenAI key. Check [Google pricing](https://aistudio.google.com/docs/pricing) and your project tier before use.
+
+Deadline reminders default to 24 hours before the due date. Allow notifications in macOS System Settings and enable reminders in the app. Scheduled notifications may appear while the app is closed; new or changed deadlines require the app to run and sync. Delivery depends on macOS notification settings and Focus.
+
+Click a reminder or **AI Assistant**, select the assignment and necessary files, and click **Yes — Generate Answers**. Only this explicit action sends assignment text and selected files to Google Gemini. Google may use free-tier content to improve its products. School credentials and session cookies are not sent. Supported inputs: PDF, DOCX, PNG/JPG/WebP, UTF-8 TXT/MD/CSV (10 MB per file, 20 MB total). DOCX is read as text; export to PDF for diagrams or visual layout. The app does not fetch external attachment links.
+
+Answers are saved as Markdown drafts in the app data directory under **AI Homework/**. Use **Export File** or **Show in Finder**, and review before submitting yourself. Missing information is identified instead of invented. Cancel stops the request; errors and incomplete responses do not save an answer file.

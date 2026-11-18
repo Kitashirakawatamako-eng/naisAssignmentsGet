@@ -43,6 +43,7 @@ final class AssignmentStore: ObservableObject {
     @Published private(set) var timetableIssue: String?
     @Published private(set) var timetableNeedsLogin = false
 
+    let assistant: HomeworkAssistant
     let root: URL
     private let resources: URL?
     private let defaults = UserDefaults.standard
@@ -53,6 +54,7 @@ final class AssignmentStore: ObservableObject {
     private var timetableAfterRequest = false
 
     init(root: URL, resources: URL? = nil) {
+        self.assistant = HomeworkAssistant(root: root)
         self.root = root
         self.resources = resources
         let data = UserDefaults.standard.data(forKey: "filters")
@@ -85,8 +87,8 @@ final class AssignmentStore: ObservableObject {
     }
 
     var lastSync: String {
-        guard let date = Beijing.parse(snapshot.checkedAt) else { return "尚未同步" }
-        return "上次同步 \(Beijing.dueLabel(date, relativeTo: now))"
+        guard let date = Beijing.parse(snapshot.checkedAt) else { return "Not synced yet" }
+        return "Last synced \(Beijing.dueLabel(date, relativeTo: now))"
     }
 
     func start() {
@@ -122,6 +124,7 @@ final class AssignmentStore: ObservableObject {
 
     func pulse() {
         now = Date()
+        if !loading { assistant.update(snapshot.tasks) }
         keepSelection()
         if !requesting && !schoolLoginOpen {
             send(["action": "poll", "automatic": automatic && !loading && !needsSetup])
@@ -193,16 +196,16 @@ final class AssignmentStore: ObservableObject {
         guard tasks.contains(where: \.pending) else { return }
         let text = MarkdownChecklist.text(tasks: tasks, range: filters.range, now: now)
         let panel = NSSavePanel()
-        panel.title = "导出作业待办"
+        panel.title = "Export Assignment To-Do List"
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
-        panel.nameFieldStringValue = "作业待办-\(Beijing.day(now)).md"
+        panel.nameFieldStringValue = "Assignment-To-Do-\(Beijing.day(now)).md"
         panel.canCreateDirectories = true
         let write: (NSApplication.ModalResponse) -> Void = { [weak self] result in
             guard result == .OK, let url = panel.url else { return }
             do {
                 try text.write(to: url, atomically: true, encoding: .utf8)
             } catch {
-                self?.showError("保存待办失败。", detail: error.localizedDescription)
+                self?.showError("Could not save the to-do list.", detail: error.localizedDescription)
             }
         }
         if let window = NSApp.keyWindow {
@@ -224,7 +227,7 @@ final class AssignmentStore: ObservableObject {
     }
 
     func open(_ url: URL) {
-        if !NSWorkspace.shared.open(url) { showError("无法打开文件或链接。", detail: nil) }
+        if !NSWorkspace.shared.open(url) { showError("Could not open the file or link.", detail: nil) }
     }
 
     func copy(_ url: URL) {
@@ -249,7 +252,7 @@ final class AssignmentStore: ObservableObject {
     private func connect() throws {
         guard let resources else {
             throw NSError(domain: "AssignmentStore", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "应用文件不完整，请重新运行「安装并打开.command」。"
+                NSLocalizedDescriptionKey: "The app is incomplete. Run the installer again."
             ])
         }
         #if arch(arm64)
@@ -263,14 +266,14 @@ final class AssignmentStore: ObservableObject {
         let python = runtime.appendingPathComponent("bin/python3.13")
         guard files.fileExists(atPath: backend.path), files.isExecutableFile(atPath: python.path) else {
             throw NSError(domain: "AssignmentStore", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "同步模块不完整，请重新运行「安装并打开.command」。"
+                NSLocalizedDescriptionKey: "The sync module is incomplete. Run the installer again."
             ])
         }
         try files.createDirectory(at: root, withIntermediateDirectories: true,
                                   attributes: [.posixPermissions: 0o700])
         var environment = ProcessInfo.processInfo.environment
         environment["SP_ASSIGNMENTS_HOME"] = root.path
-        environment["SP_ASSIGNMENTS_MODEL_DIR"] = resources.appendingPathComponent("Models/en-zh").path
+        environment["SP_ASSIGNMENTS_MODEL_DIR"] = resources.appendingPathComponent("Models/zh-en").path
         environment["SSL_CERT_FILE"] = runtime.appendingPathComponent("lib/python3.13/site-packages/certifi/cacert.pem").path
         let child = Process()
         let stdin = Pipe()
@@ -331,8 +334,8 @@ final class AssignmentStore: ObservableObject {
         working = nil
         refreshAfterRequest = false
         timetableAfterRequest = false
-        timetableIssue = "课表同步服务已退出。点「刷新课表」重试。"
-        syncIssue = "同步服务已退出。点「立即同步」重试。"
+        timetableIssue = "The timetable sync service stopped. Click Refresh Timetable to try again."
+        syncIssue = "The sync service stopped. Click Sync Now to try again."
     }
 
     private func receive(_ event: BackendEvent) {
@@ -354,7 +357,7 @@ final class AssignmentStore: ObservableObject {
                 settingsIssue = event.error
                 if event.error == nil {
                     if event.operation == "verify" { schoolLoginOpen = false }
-                    settingsNotice = event.operation == "configure" ? "自动登录已启用。" : "学校会话已更新。"
+                    settingsNotice = event.operation == "configure" ? "Automatic login is enabled." : "School session updated."
                     syncIssue = nil
                     needsLogin = false
                     refreshAfterRequest = true

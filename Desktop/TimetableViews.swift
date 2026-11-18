@@ -2,15 +2,21 @@ import AppKit
 import SwiftUI
 
 struct DeskTabs: View {
+    @AppStorage("interfaceLanguage") private var interfaceLanguage = "en"
     @Binding var page: DeskPage
 
     var body: some View {
-        Picker("应用页面", selection: $page) {
-            ForEach(DeskPage.allCases) { page in Text(page.rawValue).tag(page) }
+        HStack {
+        Button(interfaceLanguage == "en" ? "中文" : "English") {
+            interfaceLanguage = interfaceLanguage == "en" ? "zh-Hans" : "en"
+        }
+        Picker("App Page", selection: $page) {
+            ForEach(DeskPage.allCases) { page in Text(LocalizedStringKey(page.rawValue)).tag(page) }
         }
         .labelsHidden()
         .pickerStyle(.segmented)
         .fixedSize()
+        }
     }
 }
 
@@ -29,22 +35,22 @@ struct TimetableWindow: View {
                     .background(jade.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("课程表").font(.system(size: 27, weight: .semibold))
+                    Text("Timetable").font(.system(size: 27, weight: .semibold))
                     Text(Beijing.dayLabel(store.now)).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
                 DeskTabs(page: $store.page)
                 Button { store.floatingTimetable.toggle() } label: {
-                    Label(store.floatingTimetable ? "隐藏小窗" : "显示小窗",
+                    Label(store.floatingTimetable ? "Hide Floating Timetable" : "Show Floating Timetable",
                           systemImage: store.floatingTimetable ? "pin.fill" : "pin")
                 }
-                .help("开关桌面课表小窗")
+                .help("Show or hide the floating timetable")
                 Button { store.refreshTimetable() } label: {
-                    Label(store.working == "timetable" ? "正在刷新" : "刷新课表", systemImage: "arrow.clockwise")
+                    Label(store.working == "timetable" ? "Refreshing…" : "Refresh Timetable", systemImage: "arrow.clockwise")
                 }
                 .disabled(store.working == "timetable")
                 .keyboardShortcut("r", modifiers: .command)
-                Button { store.settingsOpen = true } label: { Label("设置", systemImage: "gearshape") }
+                Button { store.settingsOpen = true } label: { Label("Settings", systemImage: "gearshape") }
             }
             .controlSize(.large)
             .padding(.horizontal, 22)
@@ -52,16 +58,16 @@ struct TimetableWindow: View {
             .padding(.bottom, 14)
 
             HStack(alignment: .top, spacing: 10) {
-                LessonStatus(caption: "正在上课", lesson: store.currentLesson, now: store.now,
-                             empty: store.timetableCoversToday ? "当前无课" : "课表待更新", active: true)
-                LessonStatus(caption: "下一节", lesson: store.nextLesson, now: store.now,
-                             empty: store.timetableCoversToday ? "已同步日期内暂无课程" : "课表待更新")
+                LessonStatus(caption: "Current Class", lesson: store.currentLesson, now: store.now,
+                             empty: store.timetableCoversToday ? "No class now" : "Timetable not updated", active: true)
+                LessonStatus(caption: "Next Class", lesson: store.nextLesson, now: store.now,
+                             empty: store.timetableCoversToday ? "No more classes scheduled" : "Timetable not updated")
             }
             .padding(.horizontal, 22)
             .padding(.bottom, 14)
 
             HStack {
-                Picker("课表范围", selection: $range) {
+                Picker("Timetable Range", selection: $range) {
                     ForEach(TimetableRange.allCases) { range in Text(range.rawValue).tag(range) }
                 }
                 .labelsHidden().pickerStyle(.segmented).fixedSize()
@@ -74,7 +80,7 @@ struct TimetableWindow: View {
                 HStack(spacing: 8) {
                     Label(error, systemImage: "exclamationmark.circle")
                     Spacer()
-                    if store.timetableNeedsLogin { Button("登录设置") { store.settingsOpen = true } }
+                    if store.timetableNeedsLogin { Button("Login Settings") { store.settingsOpen = true } }
                 }
                 .font(.callout)
                 .padding(.horizontal, 22).padding(.vertical, 8)
@@ -90,10 +96,10 @@ struct TimetableWindow: View {
             Divider()
             HStack {
                 if store.working == "timetable" { ProgressView().controlSize(.small) }
-                Text(store.snapshot.timetable.map { "课表更新 \(Beijing.dueLabel($0.checkedAt, relativeTo: store.now))" }
-                     ?? "等待同步课表")
+                Text(store.snapshot.timetable.map { "Timetable updated \(Beijing.dueLabel($0.checkedAt, relativeTo: store.now))" }
+                     ?? "Waiting for timetable sync")
                 Spacer()
-                Text("北京时间")
+                Text("China Standard Time")
             }
             .font(.caption).foregroundStyle(.secondary)
             .padding(.horizontal, 22).frame(height: 32)
@@ -114,7 +120,7 @@ struct TimetableWindow: View {
             if range == .today {
                 let courses = days.first.map { timetable.lessons(on: $0) } ?? []
                 if courses.isEmpty {
-                    empty("今天没有排课")
+                    empty("No classes scheduled today")
                 } else {
                     LazyVStack(spacing: 5) {
                         ForEach(courses) { course in DayLessonRow(course: course, now: store.now) }
@@ -124,7 +130,7 @@ struct TimetableWindow: View {
                 WeekGrid(days: days, timetable: timetable, now: store.now)
             }
         } else {
-            empty(store.working == "timetable" ? "正在读取学校课表…" : "暂无这段时间的课表，点「刷新课表」读取。")
+            empty(store.working == "timetable" ? "Loading school timetable…" : "No timetable for this period. Click Refresh Timetable to load it.")
         }
     }
 
@@ -143,8 +149,8 @@ private struct DayLessonRow: View {
             Text(course.timeRange).monospacedDigit().foregroundStyle(active ? jade : .secondary)
                 .frame(width: 112, alignment: .leading)
             Text(course.title).fontWeight(.semibold)
-            if course.temporary { Text("临时排课").font(.caption).foregroundStyle(.secondary) }
-            if active { Text("上课中").font(.caption.weight(.semibold)).foregroundStyle(jade) }
+            if course.temporary { Text("Temporary Class").font(.caption).foregroundStyle(.secondary) }
+            if active { Text("In Progress").font(.caption.weight(.semibold)).foregroundStyle(jade) }
             Spacer()
             if let teacher = course.teacher { Text(teacher).foregroundStyle(.secondary).lineLimit(1) }
             if let room = course.room {
@@ -174,7 +180,7 @@ private struct WeekGrid: View {
         let times = Set(columns.flatMap { $0.byTime.keys }).sorted()
         VStack(spacing: 5) {
             HStack(spacing: 6) {
-                Text("开始").font(.caption).foregroundStyle(.secondary).frame(width: 55, alignment: .leading)
+                Text("Start").font(.caption).foregroundStyle(.secondary).frame(width: 55, alignment: .leading)
                 ForEach(columns, id: \.day) { column in
                     let isToday = Beijing.calendar.isDate(column.day, inSameDayAs: now)
                     VStack(spacing: 2) {
@@ -188,7 +194,7 @@ private struct WeekGrid: View {
                 }
             }
             if times.isEmpty {
-                Text("这周没有排课").foregroundStyle(.secondary).padding(.vertical, 35)
+                Text("No classes scheduled this week").foregroundStyle(.secondary).padding(.vertical, 35)
             }
             ForEach(times, id: \.self) { time in
                 HStack(alignment: .top, spacing: 6) {
@@ -254,16 +260,16 @@ struct TimetableMenuLabel: View {
 
     var body: some View {
         Label(title, systemImage: "calendar").labelStyle(.titleAndIcon)
-            .accessibilityLabel("课表 \(title)")
+            .accessibilityLabel("Timetable: \(title)")
     }
 
     private var title: String {
-        guard store.timetableCoversToday else { return "课表待更新" }
-        let current = store.currentLesson.map { "上课 " + $0.menuTitle } ?? "当前无课"
-        guard let next = store.nextLesson else { return current + " · 暂无下节" }
+        guard store.timetableCoversToday else { return "Timetable not updated" }
+        let current = store.currentLesson.map { "Now: " + $0.menuTitle } ?? "No class now"
+        guard let next = store.nextLesson else { return current + " · No next class" }
         let today = Beijing.calendar.isDate(next.startAt, inSameDayAs: store.now)
         let prefix = today ? "" : Beijing.weekday(next.startAt) + " "
-        return current + " · 下节 " + prefix + Beijing.clock(next.startAt) + " " + next.menuTitle
+        return current + " · Next: " + prefix + Beijing.clock(next.startAt) + " " + next.menuTitle
     }
 }
 
@@ -275,29 +281,29 @@ struct TimetableMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text(Beijing.dayLabel(store.now)).font(.headline)
-            LessonStatus(caption: "正在上课", lesson: store.currentLesson, now: store.now,
-                         empty: store.timetableCoversToday ? "当前无课" : "课表待更新", active: true)
-            LessonStatus(caption: "下一节", lesson: store.nextLesson, now: store.now,
-                         empty: store.timetableCoversToday ? "已同步日期内暂无课程" : "课表待更新")
+            LessonStatus(caption: "Current Class", lesson: store.currentLesson, now: store.now,
+                         empty: store.timetableCoversToday ? "No class now" : "Timetable not updated", active: true)
+            LessonStatus(caption: "Next Class", lesson: store.nextLesson, now: store.now,
+                         empty: store.timetableCoversToday ? "No more classes scheduled" : "Timetable not updated")
             if let error = store.timetableIssue {
                 Text(error).font(.caption).foregroundStyle(.secondary)
             }
             HStack {
-                Button("打开课表") { reveal(.timetable) }
-                Button("作业") { reveal(.assignments) }
+                Button("Open Timetable") { reveal(.timetable) }
+                Button("Assignments") { reveal(.assignments) }
                 Spacer()
                 Button {
                     store.refreshTimetable()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .accessibilityLabel("刷新课表")
+                .accessibilityLabel("Refresh Timetable")
                 .disabled(store.working == "timetable")
             }
             Divider()
-            Toggle("课表小窗", isOn: $store.floatingTimetable)
+            Toggle("Floating Timetable", isOn: $store.floatingTimetable)
                 .toggleStyle(.checkbox)
-            Button("退出作业速览") { NSApp.terminate(nil) }.buttonStyle(.link)
+            Button("Quit Assignment Overview") { NSApp.terminate(nil) }.buttonStyle(.link)
         }
         .padding(14)
         .frame(width: 286)

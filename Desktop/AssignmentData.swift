@@ -1,11 +1,12 @@
 import Foundation
 
 enum DateRange: String, CaseIterable, Codable, Identifiable {
-    case today = "今天", yesterday = "昨天", three = "近 3 天", seven = "近 7 天", month = "本月"
+    case today = "Today", yesterday = "Yesterday", three = "Last 3 Days", seven = "Last 7 Days", month = "This Month", all = "All Dates"
     var id: Self { self }
 
     func contains(_ day: String?, relativeTo now: Date) -> Bool {
         let today = Beijing.day(now)
+        if self == .all { return true }
         if self == .month {
             return day?.hasPrefix(String(today.prefix(7))) ?? true
         }
@@ -17,7 +18,7 @@ enum DateRange: String, CaseIterable, Codable, Identifiable {
 }
 
 enum TaskType: String, CaseIterable, Codable, Identifiable {
-    case homework = "作业", pending = "待办", grades = "成绩", records = "仅记录", uncertain = "待确认"
+    case homework = "Homework", pending = "To Do", grades = "Grades", records = "Records", uncertain = "Needs Review"
     var id: Self { self }
 
     func includes(_ task: Assignment) -> Bool {
@@ -34,7 +35,14 @@ enum TaskType: String, CaseIterable, Codable, Identifiable {
 enum Submission: String, CaseIterable, Codable, Identifiable {
     case unsubmitted, submitted
     var id: Self { self }
-    var label: String { self == .unsubmitted ? "未提交" : "已提交" }
+    var label: String { self == .unsubmitted ? "Not Submitted" : "Submitted" }
+}
+
+enum AssignmentQuickFilter: String, CaseIterable, Codable, Identifiable {
+    case overdue = "Overdue"
+    case dueToday = "Due Today"
+    case hasAttachments = "Has Attachments"
+    var id: Self { self }
 }
 
 struct AssignmentFilters: Codable, Equatable {
@@ -42,21 +50,49 @@ struct AssignmentFilters: Codable, Equatable {
     var types: Set<TaskType> = [.homework]
     var courses: Set<String> = []
     var submissions: Set<Submission> = []
+    var quickFilters: Set<AssignmentQuickFilter> = []
+    var deadlineView = false
     var search = ""
 
+    private enum CodingKeys: String, CodingKey { case range, types, courses, submissions, quickFilters, search, deadlineView }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        range = try values.decodeIfPresent(DateRange.self, forKey: .range) ?? .today
+        types = try values.decodeIfPresent(Set<TaskType>.self, forKey: .types) ?? [.homework]
+        courses = try values.decodeIfPresent(Set<String>.self, forKey: .courses) ?? []
+        submissions = try values.decodeIfPresent(Set<Submission>.self, forKey: .submissions) ?? []
+        quickFilters = try values.decodeIfPresent(Set<AssignmentQuickFilter>.self, forKey: .quickFilters) ?? []
+        deadlineView = try values.decodeIfPresent(Bool.self, forKey: .deadlineView) ?? false
+        search = try values.decodeIfPresent(String.self, forKey: .search) ?? ""
+    }
+
     var activeCount: Int {
-        (types == [.homework] ? 0 : max(types.count, 1)) + courses.count + submissions.count
+        (types == [.homework] ? 0 : max(types.count, 1)) + courses.count + submissions.count + quickFilters.count
     }
 
     func apply(to tasks: [Assignment], now: Date) -> [Assignment] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let dueFilters = quickFilters.intersection([.overdue, .dueToday])
         return tasks.filter { task in
-            range.contains(task.assignedDay, relativeTo: now)
+            (deadlineView || !dueFilters.isEmpty || range.contains(task.assignedDay, relativeTo: now))
                 && (types.isEmpty || types.contains { $0.includes(task) })
                 && (courses.isEmpty || courses.contains(task.course))
                 && (submissions.isEmpty || submissions.contains { $0.rawValue == task.submissionBucket })
+                && (dueFilters.isEmpty || dueFilters.contains { filter in
+                    filter == .overdue ? task.overdue(at: now) : task.dueToday(at: now)
+                })
+                && (!quickFilters.contains(.hasAttachments) || !task.attachments.isEmpty)
                 && (query.isEmpty || task.searchable.localizedStandardContains(query))
         }.sorted { left, right in
+            if deadlineView {
+                if left.pending != right.pending { return left.pending }
+                let a = Beijing.parse(left.due) ?? .distantFuture
+                let b = Beijing.parse(right.due) ?? .distantFuture
+                return a == b ? left.id < right.id : a < b
+            }
             if left.assignedDay != right.assignedDay { return (left.assignedDay ?? "") > (right.assignedDay ?? "") }
             if left.pending != right.pending { return left.pending }
             let leftDue = Beijing.parse(left.due) ?? .distantFuture
@@ -76,6 +112,15 @@ struct Assignment: Decodable, Identifiable {
     let attachments: [Attachment]
     let pending, translated, detailPending: Bool
 
+    var statusLabel: String {
+        ["免交": "Exempt", "仅记录": "Record Only", "待确认": "Needs Review",
+         "待确认完成": "Confirm Completion", "未提交（已关闭）": "Not Submitted (Closed)",
+         "未提交": "Not Submitted", "已批改": "Graded", "批改中": "Being Graded",
+         "延迟完成": "Submitted Late", "抄袭": "Flagged for Plagiarism", "已提交": "Submitted",
+         "提交已关闭": "Submission Closed", "已归档": "Archived", "按时完成": "Completed On Time",
+         "未完成": "Incomplete", "待提交": "Not Submitted", "状态未知": "Status Unknown"][status] ?? status
+    }
+
     var searchable: String {
         [brief, title, originalTitle, original, subject, course, taskType,
          attachments.map(\.name).joined(separator: " ")].joined(separator: "\n")
@@ -83,6 +128,10 @@ struct Assignment: Decodable, Identifiable {
 
     func overdue(at now: Date) -> Bool {
         pending && (Beijing.parse(due) ?? .distantFuture) < now
+    }
+
+    func dueToday(at now: Date) -> Bool {
+        Beijing.parse(due).map { Beijing.calendar.isDate($0, inSameDayAs: now) } == true
     }
 }
 
@@ -115,7 +164,18 @@ struct TaskDay: Identifiable {
     let tasks: [Assignment]
 
     var label: String {
-        Beijing.parseDay(id).map(Beijing.dayLabel) ?? "日期未注明"
+        Beijing.parseDay(id).map(Beijing.dayLabel) ?? (id.isEmpty ? "Date not specified" : id)
+    }
+
+    static func deadlineGroups(_ tasks: [Assignment]) -> [TaskDay] {
+        var result: [TaskDay] = []
+        for task in tasks {
+            let key = task.pending ? (Beijing.parse(task.due).map(Beijing.day) ?? "No due date") : "Completed"
+            if let index = result.firstIndex(where: { $0.id == key }) {
+                result[index] = TaskDay(id: key, tasks: result[index].tasks + [task])
+            } else { result.append(TaskDay(id: key, tasks: [task])) }
+        }
+        return result
     }
 
     static func groups(_ sortedTasks: [Assignment]) -> [TaskDay] {
@@ -135,14 +195,14 @@ enum Beijing {
 
     private static let iso = ISO8601DateFormatter()
     private static let dayFormat = formatter("yyyy-MM-dd", locale: "en_US_POSIX")
-    private static let calendarFormat = formatter("M月d日 EEEE")
+    private static let calendarFormat = formatter("MMM d, EEEE", locale: "en_US")
     private static let clockFormat = formatter("HH:mm")
-    private static let dateTimeFormat = formatter("M月d日 HH:mm")
-    private static let shortDayFormat = formatter("M月d日")
+    private static let dateTimeFormat = formatter("MMM d HH:mm", locale: "en_US")
+    private static let shortDayFormat = formatter("MMM d", locale: "en_US")
     private static let weekdayFormat = formatter("EEE")
     private static let exportFormat = formatter("yyyy-MM-dd HH:mm", locale: "en_US_POSIX")
 
-    private static func formatter(_ pattern: String, locale: String = "zh_CN") -> DateFormatter {
+    private static func formatter(_ pattern: String, locale: String = "en_US") -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: locale)
         formatter.calendar = calendar
@@ -162,9 +222,9 @@ enum Beijing {
     static func exportTime(_ date: Date) -> String { exportFormat.string(from: date) }
 
     static func dueLabel(_ date: Date, relativeTo now: Date) -> String {
-        if calendar.isDate(date, inSameDayAs: now) { return "今天 \(clock(date))" }
+        if calendar.isDate(date, inSameDayAs: now) { return "Today \(clock(date))" }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
-           calendar.isDate(date, inSameDayAs: tomorrow) { return "明天 \(clock(date))" }
+           calendar.isDate(date, inSameDayAs: tomorrow) { return "Tomorrow \(clock(date))" }
         return dateTime(date)
     }
 }
@@ -172,21 +232,21 @@ enum Beijing {
 enum MarkdownChecklist {
     static func text(tasks: [Assignment], range: DateRange, now: Date) -> String {
         let pending = tasks.filter(\.pending)
-        var lines = ["# 作业待办", "", "\(Beijing.day(now)) · \(range.rawValue) · \(pending.count) 项 · 北京时间"]
+        var lines = ["# Assignment To-Do List", "", "\(Beijing.day(now)) · \(range.rawValue) · \(pending.count) tasks · China Standard Time"]
         for day in TaskDay.groups(pending) {
-            lines += ["", "## \(day.id.isEmpty ? "布置日期未注明" : day.id)", ""]
+            lines += ["", "## \(day.id.isEmpty ? "Assignment date not specified" : day.id)", ""]
             for task in day.tasks {
-                let deadline = Beijing.parse(task.due).map { "截止 " + Beijing.exportTime($0) } ?? "截止未注明"
-                let overdue = task.overdue(at: now) ? "（逾期）" : ""
-                lines.append("- [ ] **\(escape(task.subject))**：\(escape(task.brief)) · \(deadline)\(overdue)")
+                let deadline = Beijing.parse(task.due).map { "Due " + Beijing.exportTime($0) } ?? "No due date"
+                let overdue = task.overdue(at: now) ? " (Overdue)" : ""
+                lines.append("- [ ] **\(escape(task.subject))**: \(escape(task.brief)) · \(deadline)\(overdue)")
                 if let submission = task.submission, !task.brief.contains(submission) {
-                    lines.append("  - 怎么交：\(escape(submission))")
+                    lines.append("  - Submission: \(escape(submission))")
                 }
                 let links = task.attachments.compactMap { attachment -> String? in
                     guard let url = attachment.originalURL else { return nil }
                     return "[\(escape(attachment.name))](<\(url.absoluteString)>)"
                 }
-                if !links.isEmpty { lines.append("  - 附件：" + links.joined(separator: "、")) }
+                if !links.isEmpty { lines.append("  - Attachments: " + links.joined(separator: ", ")) }
             }
         }
         return lines.joined(separator: "\n") + "\n"
