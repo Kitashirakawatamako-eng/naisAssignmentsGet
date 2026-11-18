@@ -30,7 +30,7 @@ struct TimetableWindow: View {
             HStack(spacing: 12) {
                 Image(systemName: "calendar")
                     .font(.system(size: 21, weight: .medium))
-                    .foregroundStyle(jade)
+                    .foregroundStyle(oceanBlue)
                     .frame(width: 43, height: 43)
                     .background(jade.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityHidden(true)
@@ -56,6 +56,7 @@ struct TimetableWindow: View {
             .padding(.horizontal, 22)
             .padding(.top, 16)
             .padding(.bottom, 14)
+            .background(headerDecoration)
 
             HStack(alignment: .top, spacing: 10) {
                 LessonStatus(caption: "Current Class", lesson: store.currentLesson, now: store.now,

@@ -44,3 +44,7 @@ Deadline reminders default to 24 hours before the due date. Allow notifications 
 Click a reminder or **AI Assistant**, select the assignment and necessary files, and click **Yes — Generate Answers**. Only this explicit action sends assignment text and selected files to Google Gemini. Google may use free-tier content to improve its products. School credentials and session cookies are not sent. Supported inputs: PDF, DOCX, PNG/JPG/WebP, UTF-8 TXT/MD/CSV (10 MB per file, 20 MB total). DOCX is read as text; export to PDF for diagrams or visual layout. The app does not fetch external attachment links.
 
 Answers are saved as Markdown drafts in the app data directory under **AI Homework/**. Use **Export File** or **Show in Finder**, and review before submitting yourself. Missing information is identified instead of invented. Cancel stops the request; errors and incomplete responses do not save an answer file.
+
+## Appearance (local version 1.3.0)
+
+Open **Settings → Appearance** to independently choose **Ocean White** (white with green and blue accents) or **Classic Jade** (the original theme, following system light/dark mode), and **Pixel Anomalocaris** or **Original Icon**. Both preferences are saved across launches. The new icon updates the Dock immediately and applies a Finder custom icon without replacing signed resources. The original icon is preserved in `Desktop/ClassicIcon.icns`.

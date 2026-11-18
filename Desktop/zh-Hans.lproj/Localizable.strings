@@ -173,3 +173,13 @@
 "This key belongs to a project with billing disabled" = "此密钥所属项目未启用计费";
 "Use a Google project with billing disabled. The app cannot verify billing status from your key. Free quotas apply; requests stop at the limit." = "请使用未启用计费的 Google 项目。本应用无法通过密钥验证计费状态。达到免费额度上限后请求会停止。";
 "Approval sends assignment text and selected files to Google Gemini. Google may use free-tier content to improve its products." = "同意后将作业正文与所选文件发送至 Google Gemini。Google 可能使用免费额度的内容改进产品。";
+
+"Appearance" = "外观";
+"Color theme" = "配色主题";
+"Ocean White" = "海洋白";
+"Classic Jade" = "经典玉绿";
+"Original theme · follows system appearance" = "原始主题 · 跟随系统外观";
+"White with green and blue accents" = "白色背景与绿蓝点缀";
+"App icon" = "应用图标";
+"Pixel Anomalocaris" = "像素奇虾";
+"Original Icon" = "原始图标";

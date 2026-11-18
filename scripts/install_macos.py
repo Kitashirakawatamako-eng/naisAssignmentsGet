@@ -74,6 +74,8 @@ def build_app(stage, runtime, architecture):
     resources.mkdir()
     shutil.copyfile(SOURCE / "Desktop/Info.plist", contents / "Info.plist")
     shutil.copyfile(SOURCE / "Desktop/AppIcon.icns", resources / "AppIcon.icns")
+    for name in ["ClassicIcon.icns", "CreatureIcon.icns"]:
+        shutil.copyfile(SOURCE / "Desktop" / name, resources / name)
     for localization in (SOURCE / "Desktop").glob("*.lproj"):
         shutil.copytree(localization, resources / localization.name)
     backend = resources / "Backend"

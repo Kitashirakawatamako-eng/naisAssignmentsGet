@@ -61,7 +61,7 @@ final class TimetablePanelController: NSObject, NSWindowDelegate {
         window.animationBehavior = .none
         window.contentView = TimetableHostingView(rootView: TimetablePanelCard(
             store: store, openTimetable: { [weak self] in self?.openTimetable?() }
-        ).frame(width: Self.size.width, height: Self.size.height))
+        ).modifier(AppearanceSurface()).frame(width: Self.size.width, height: Self.size.height))
         window.delegate = self
         return window
     }

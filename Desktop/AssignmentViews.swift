@@ -1,12 +1,5 @@
 import SwiftUI
 
-let jade = Color(nsColor: NSColor(name: nil) { appearance in
-    let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-    return dark ? NSColor(srgbRed: 0.47, green: 0.80, blue: 0.70, alpha: 1)
-        : NSColor(srgbRed: 0.13, green: 0.35, blue: 0.29, alpha: 1)
-})
-let panel = Color(nsColor: .controlBackgroundColor)
-let backdrop = Color(nsColor: .windowBackgroundColor)
 private let schoolURL = URL(string: "https://naisstu.schoolis.cn/Home#!/task/list/")!
 
 struct AssignmentWindow: View {
@@ -58,7 +51,7 @@ struct AssignmentWindow: View {
         HStack(spacing: 12) {
             Image(systemName: "checklist")
                 .font(.system(size: 21, weight: .medium))
-                .foregroundStyle(jade)
+                .foregroundStyle(oceanBlue)
                 .frame(width: 43, height: 43)
                 .background(jade.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
                 .accessibilityHidden(true)
@@ -80,6 +73,7 @@ struct AssignmentWindow: View {
         .padding(.horizontal, 22)
         .padding(.top, 16)
         .padding(.bottom, 14)
+        .background(headerDecoration)
     }
 
     private var controls: some View {
@@ -426,6 +420,8 @@ struct AssignmentSettings: View {
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
+            AppearanceSettings()
+            Divider()
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Automatic Sync", isOn: $store.automatic).toggleStyle(.switch)
                 Text("Checks for assignments every minute on weekdays from 08:00 to 20:00. The timetable refreshes every 30 minutes. Times use China Standard Time.")

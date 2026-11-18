@@ -20,6 +20,7 @@ private final class AppLifecycle: NSObject, NSApplicationDelegate {
 struct HomeworkApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
     @AppStorage("interfaceLanguage") private var interfaceLanguage = "en"
+    @AppStorage("appearanceTheme") private var theme = "ocean"
     @StateObject private var store: AssignmentStore
     @StateObject private var assistant: HomeworkAssistant
     @Environment(\.openWindow) private var openWindow
@@ -41,8 +42,10 @@ struct HomeworkApp: App {
                 case .timetable: TimetableWindow(store: store)
                 }
             }
+            .modifier(AppearanceSurface())
             .sheet(isPresented: $store.settingsOpen) { AssignmentSettings(store: store, assistant: assistant) }
             .sheet(isPresented: $assistant.showPanel) { HomeworkAIPanel(assistant: assistant, store: store) }
+            .preferredColorScheme(theme == "classic" ? nil : .light)
             .environment(\.locale, Locale(identifier: interfaceLanguage))
             .onAppear(perform: connect)
         }
@@ -60,7 +63,7 @@ struct HomeworkApp: App {
             }
         }
         MenuBarExtra {
-            TimetableMenu(store: store)
+            TimetableMenu(store: store).modifier(AppearanceSurface())
         } label: {
             TimetableMenuLabel(store: store)
                 .environment(\.locale, Locale(identifier: interfaceLanguage))
@@ -70,6 +73,7 @@ struct HomeworkApp: App {
     }
 
     private func connect() {
+        AppIconChoice.apply(UserDefaults.standard.string(forKey: "appearanceIcon") ?? "creature")
         lifecycle.store = store
         let open = openWindow
         lifecycle.timetablePanel.attach(store: store) { [weak store] in
