@@ -27,6 +27,15 @@ final class AssignmentStore: ObservableObject {
     @Published var floatingTimetable: Bool {
         didSet { defaults.set(floatingTimetable, forKey: "floatingTimetable") }
     }
+    enum PinScope: Equatable {
+        case global, filtered
+    }
+    @Published private(set) var globalPins: Set<String> {
+        didSet { defaults.set(globalPins.sorted(), forKey: "pinnedAssignmentsGlobal") }
+    }
+    @Published private(set) var filterPins: Set<String> {
+        didSet { defaults.set(filterPins.sorted(), forKey: "pinnedAssignmentsFiltered") }
+    }
     @Published var selectedID: String?
     @Published var settingsOpen = false
     @Published var schoolLoginOpen = false
@@ -61,6 +70,14 @@ final class AssignmentStore: ObservableObject {
         filters = data.flatMap { try? JSONDecoder().decode(AssignmentFilters.self, from: $0) } ?? AssignmentFilters()
         automatic = UserDefaults.standard.object(forKey: "automatic") as? Bool ?? true
         floatingTimetable = UserDefaults.standard.object(forKey: "floatingTimetable") as? Bool ?? (resources == nil)
+        var globals = Set(UserDefaults.standard.stringArray(forKey: "pinnedAssignmentsGlobal") ?? [])
+        filterPins = Set(UserDefaults.standard.stringArray(forKey: "pinnedAssignmentsFiltered") ?? [])
+        if let legacy = UserDefaults.standard.stringArray(forKey: "pinnedAssignments"), !legacy.isEmpty {
+            globals.formUnion(legacy)
+            UserDefaults.standard.set(globals.sorted(), forKey: "pinnedAssignmentsGlobal")
+            UserDefaults.standard.removeObject(forKey: "pinnedAssignments")
+        }
+        globalPins = globals
         if let cached = try? Data(contentsOf: root.appendingPathComponent("data/timetable.json")) {
             snapshot.timetable = try? Self.backendDecoder().decode(Timetable.self, from: cached)
         }
@@ -68,6 +85,47 @@ final class AssignmentStore: ObservableObject {
 
     var rows: [Assignment] { filters.apply(to: snapshot.tasks, now: now) }
     var pendingCount: Int { rows.filter(\.pending).count }
+    var globalPinnedTasks: [Assignment] {
+        Self.pinnedOrder(snapshot.tasks.filter { globalPins.contains($0.id) })
+    }
+    var pinnedTasks: [Assignment] {
+        globalPinnedTasks + rows.filter { filterPins.contains($0.id) && !globalPins.contains($0.id) }
+    }
+
+    private static func pinnedOrder(_ tasks: [Assignment]) -> [Assignment] {
+        tasks.sorted { left, right in
+            if left.assignedDay != right.assignedDay { return (left.assignedDay ?? "") > (right.assignedDay ?? "") }
+            let leftDue = Beijing.parse(left.due) ?? .distantFuture
+            let rightDue = Beijing.parse(right.due) ?? .distantFuture
+            if leftDue != rightDue { return leftDue < rightDue }
+            return left.id < right.id
+        }
+    }
+
+    func pinState(_ id: String) -> PinScope? {
+        if globalPins.contains(id) { return .global }
+        if filterPins.contains(id) { return .filtered }
+        return nil
+    }
+
+    func setPin(_ id: String, scope: PinScope) {
+        globalPins.remove(id)
+        filterPins.remove(id)
+        switch scope {
+        case .global: globalPins.insert(id)
+        case .filtered: filterPins.insert(id)
+        }
+    }
+
+    func unpin(_ id: String) {
+        globalPins.remove(id)
+        filterPins.remove(id)
+    }
+
+    func togglePin(_ id: String, scope: PinScope) {
+        if pinState(id) == scope { unpin(id) } else { setPin(id, scope: scope) }
+    }
+
     var needsSetup: Bool { !loading && !snapshot.hasSession && !snapshot.autoLogin }
     var currentLesson: SchoolLesson? { snapshot.timetable?.current(at: now) }
     var nextLesson: SchoolLesson? { snapshot.timetable?.next(after: now) }
@@ -80,10 +138,23 @@ final class AssignmentStore: ObservableObject {
         }
     }
 
-    var inSchedule: Bool {
-        let parts = Beijing.calendar.dateComponents([.weekday, .hour, .minute], from: now)
+    var inSchedule: Bool { Self.inSchedule(at: now) }
+
+    private static func inSchedule(at date: Date) -> Bool {
+        let parts = Beijing.calendar.dateComponents([.weekday, .hour, .minute], from: date)
         guard let weekday = parts.weekday, let hour = parts.hour, let minute = parts.minute else { return false }
         return (2...6).contains(weekday) && ((8..<20).contains(hour) || (hour == 20 && minute == 0))
+    }
+
+    var syncRecoveryHint: String? {
+        guard !needsLogin, let retry = Beijing.parse(snapshot.retryAt) else { return nil }
+        if working == "sync" { return "Retrying…" }
+        if !automatic { return "Automatic retry paused" }
+        if !inSchedule || !Self.inSchedule(at: max(now, retry)) { return "Will retry during sync hours" }
+        let seconds = retry.timeIntervalSince(now)
+        if seconds <= 0 { return "Waiting to retry" }
+        if seconds < 60 { return "Retrying in about \(Int(seconds.rounded(.up))) seconds" }
+        return "Retry scheduled for \(Beijing.clock(retry))"
     }
 
     var lastSync: String {
@@ -237,8 +308,8 @@ final class AssignmentStore: ObservableObject {
 
     private func keepSelection() {
         let visible = rows
-        if let selectedID, visible.contains(where: { $0.id == selectedID }) { return }
-        selectedID = visible.first?.id
+        if let selectedID, globalPins.contains(selectedID) || visible.contains(where: { $0.id == selectedID }) { return }
+        selectedID = pinnedTasks.first?.id ?? visible.first?.id
     }
 
     private func showError(_ text: String, detail: String?) {

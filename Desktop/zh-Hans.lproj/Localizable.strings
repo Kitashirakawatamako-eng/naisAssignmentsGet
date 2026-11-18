@@ -183,3 +183,9 @@
 "App icon" = "应用图标";
 "Pixel Anomalocaris" = "像素奇虾";
 "Original Icon" = "原始图标";
+
+"Pin Globally" = "全局置顶";
+"Pin Within Filters" = "仅当前筛选";
+"Unpin" = "取消置顶";
+"Pinned" = "已置顶";
+"Pinned Within Filters" = "筛选内置顶";

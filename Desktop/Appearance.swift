@@ -3,18 +3,18 @@ import SwiftUI
 
 var oceanTheme: Bool { UserDefaults.standard.string(forKey: "appearanceTheme") != "classic" }
 var jade: Color {
-    if oceanTheme { return Color(red: 0.12, green: 0.48, blue: 0.37) }
+    if oceanTheme { return Color(red: 0.04, green: 0.60, blue: 0.38) }
     return Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             ? NSColor(srgbRed: 0.47, green: 0.80, blue: 0.70, alpha: 1)
             : NSColor(srgbRed: 0.13, green: 0.35, blue: 0.29, alpha: 1)
     })
 }
-var oceanBlue: Color { oceanTheme ? Color(red: 0.15, green: 0.43, blue: 0.65) : jade }
+var oceanBlue: Color { oceanTheme ? Color(red: 0.02, green: 0.51, blue: 0.88) : jade }
 var panel: Color { oceanTheme ? .white : Color(nsColor: .controlBackgroundColor) }
 var backdrop: Color { oceanTheme ? Color(red: 0.97, green: 0.99, blue: 1) : Color(nsColor: .windowBackgroundColor) }
 var headerDecoration: LinearGradient {
-    LinearGradient(colors: oceanTheme ? [.white, Color(red: 0.92, green: 0.98, blue: 0.96), Color(red: 0.90, green: 0.96, blue: 1)] : [.clear, .clear], startPoint: .leading, endPoint: .trailing)
+    LinearGradient(colors: oceanTheme ? [.white, Color(red: 0.80, green: 1.0, blue: 0.88), Color(red: 0.77, green: 0.93, blue: 1)] : [.clear, .clear], startPoint: .leading, endPoint: .trailing)
 }
 
 struct AppearanceSurface: ViewModifier {

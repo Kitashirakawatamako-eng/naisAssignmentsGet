@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 from queue import Full, Queue
 import re
+import socket
+import ssl
 import sys
 import tempfile
 from threading import Lock, Thread
@@ -43,6 +45,8 @@ PAGE_SIZE = 12  # Match the student portal's usual request size.
 POLL_SECONDS = 60
 DETAIL_RECHECK = timedelta(minutes=30)
 SEMESTER_RECHECK_SECONDS = 1800
+READ_TIMEOUT = 15
+RECOVERY_DELAYS = (15, 30, 60, 120, 240, 300)
 RETRYABLE_READ = (urllib.error.URLError, OSError, http.client.HTTPException)
 FILE_EXTENSIONS = {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
                    ".zip", ".rar", ".7z", ".txt", ".csv", ".png", ".jpg", ".jpeg",
@@ -56,6 +60,10 @@ def translation_model(root):
 
 
 class SyncError(Exception):
+    pass
+
+
+class TemporarySyncError(SyncError):
     pass
 
 
@@ -73,7 +81,7 @@ class SyncBusy(SyncError):
 
 class RateLimited(SyncError):
     def __init__(self, retry_after):
-        super().__init__("学校网站暂时限制检查频率，稍后会重试。")
+        super().__init__("学校网站要求稍后再试。")
         self.retry_after = retry_after
 
 
@@ -92,6 +100,25 @@ def retry_delay(header):
             except (TypeError, ValueError, OverflowError):
                 pass
     return 2 * POLL_SECONDS
+
+
+def recovery_delay(failures):
+    return RECOVERY_DELAYS[min(failures, len(RECOVERY_DELAYS)) - 1]
+
+
+def connection_error(error):
+    cause = error.reason if isinstance(error, urllib.error.URLError) else error
+    if isinstance(cause, ssl.SSLCertVerificationError):
+        return SyncError("学校网站的证书验证失败。")
+    if isinstance(cause, ssl.SSLError):
+        return TemporarySyncError("学校网站的安全连接暂时失败。")
+    if isinstance(cause, (http.client.IncompleteRead, http.client.RemoteDisconnected)):
+        return TemporarySyncError("学校接口响应中断。")
+    if isinstance(cause, TimeoutError):
+        return TemporarySyncError("学校接口响应超时。")
+    if isinstance(cause, socket.gaierror):
+        return TemporarySyncError("暂时无法解析学校网站地址。")
+    return TemporarySyncError("暂时无法连接学校接口。")
 
 
 def atomic_write(path, content):
@@ -287,7 +314,8 @@ class Client:
         url = BASE + path + ("?" + query if query else "")
         headers = {"Accept": "application/json", "Referer": referer}
         data = None
-        attempts = 3 if body is None or retry_read else 1
+        readonly = body is None or retry_read
+        attempts = 3 if readonly else 1
         if body is not None:
             headers.update({"Content-Type": "application/json", "Origin": BASE})
             data = json.dumps(body).encode()
@@ -296,32 +324,33 @@ class Client:
                 raise RateLimited(self.rate_limit_until - time.monotonic())
             try:
                 req = urllib.request.Request(url, headers=headers, data=data)
-                with self.opener.open(req, timeout=30) as response:
+                with self.opener.open(req, timeout=READ_TIMEOUT if readonly else 30) as response:
                     if not school_origin(response.url) or urllib.parse.urlsplit(response.url).path.lower().rstrip("/") == "/login":
                         raise LoginRequired("学校网站返回了登录页。")
                     raw = response.read(16 * 1024 * 1024 + 1)
-                    if response.length not in (None, 0):
-                        raise http.client.IncompleteRead(raw, response.length)
                     if len(raw) > 16 * 1024 * 1024:
                         raise SyncError("学校接口响应过大，未更新本地同步记录。")
+                    if response.length not in (None, 0):
+                        raise http.client.IncompleteRead(raw, response.length)
                 try:
                     return json.loads(raw)
                 except ValueError:
-                    if attempt + 1 == attempts:
-                        raise SyncError("学校接口未返回完整 JSON，未更新本地同步记录。") from None
+                    failure = TemporarySyncError("学校接口暂时未返回完整数据。")
             except urllib.error.HTTPError as exc:
                 if exc.code == 401:
                     raise LoginRequired("学校登录已失效。") from None
-                if exc.code == 429:
-                    delay = retry_delay(exc.headers.get("Retry-After"))
-                    self.rate_limit_until = time.monotonic() + delay
-                    raise RateLimited(delay) from None
-                if exc.code not in (500, 502, 503, 504) or attempt + 1 == attempts:
-                    raise SyncError(f"学校接口 HTTP {exc.code}。") from None
+                retry_after = exc.headers and exc.headers.get("Retry-After")
+                if exc.code == 429 or (exc.code == 503 and retry_after):
+                    now = time.monotonic()
+                    self.rate_limit_until = max(self.rate_limit_until, now + retry_delay(retry_after))
+                    raise RateLimited(self.rate_limit_until - now) from None
+                if exc.code not in (500, 502, 503, 504):
+                    raise SyncError(f"学校接口返回 HTTP {exc.code}。") from None
+                failure = TemporarySyncError(f"学校接口暂时不可用（HTTP {exc.code}）。")
             except RETRYABLE_READ as exc:
-                if attempt + 1 == attempts:
-                    reason = "学校接口响应未传完" if isinstance(exc, http.client.IncompleteRead) else "学校接口连接失败"
-                    raise SyncError(f"{reason}，已保留上次结果。") from None
+                failure = connection_error(exc)
+            if not isinstance(failure, TemporarySyncError) or attempt + 1 == attempts:
+                raise failure from None
             time.sleep(2 ** attempt)
 
     def sign_in(self, credential):
@@ -453,11 +482,11 @@ def collect_list(client, since, semester=None):
         if total is None:
             total = data["totalCount"]
         if data["totalCount"] != total:
-            raise SyncError("抓取期间任务列表发生变化，请稍后重试。")
+            raise TemporarySyncError("学校作业列表正在更新。")
         for row in items:
             ident = str(row.get("id") or "")
             if not ident or ident in seen:
-                raise SyncError("分页出现缺失或重复任务 ID，请稍后重试。")
+                raise TemporarySyncError("学校接口返回的作业列表有缺项或重复。")
             seen.add(ident)
             rows.append(row)
         if len(rows) == total:
@@ -466,7 +495,7 @@ def collect_list(client, since, semester=None):
                               if (started := due_date(row.get("beginTime"))) and started >= since]
         if not items or len(rows) > total:
             break
-    raise SyncError("任务分页不完整，未更新同步记录。")
+    raise TemporarySyncError("学校接口返回的作业列表不完整。")
 
 
 def normalize(row, detail):
@@ -594,6 +623,12 @@ def sync(client, root=ROOT, now=None, *, semester=None, refresh_details=False, d
         state = json.loads(state_file.read_text()) if state_file.exists() else {"tasks": {}}
         initial = not state_file.exists()
         semester, rows = collect_list(client, since, semester)
+        try:
+            previous_report = load_json(root / "reports/latest.json", {})
+        except ValueError:
+            previous_report = {}
+        previous_tasks = previous_report.get("tasks") if isinstance(previous_report, dict) else None
+        pending_details = {task["id"] for task in (previous_tasks or []) if task.get("detail_pending")}
         tasks, changes, warnings = [], [], []
         excluded = state.setdefault("outside_window", {})
         rows = [row for row in rows if excluded.get(str(row["id"])) != row.get("beginTime")]
@@ -608,7 +643,8 @@ def sync(client, root=ROOT, now=None, *, semester=None, refresh_details=False, d
             if checked is None and archived:
                 checked = datetime.fromtimestamp(path.stat().st_mtime, TZ)
             cached = archived.get("detail")
-            if not refresh_details and isinstance(cached, dict) and archived.get("list") == row and checked and now < checked + DETAIL_RECHECK:
+            use_cache = not refresh_details and ident not in pending_details
+            if use_cache and isinstance(cached, dict) and archived.get("list") == row and checked and now < checked + DETAIL_RECHECK:
                 return archived, cached, checked, None
             try:
                 result = client.get("/api/LearningTask/GetDetail", learningTaskId=row["id"])
@@ -786,10 +822,14 @@ def accept_browser_session(cookies):
         store_session(client.session_cookies())
 
 
-def record_failure(exc):
+def record_failure(exc, *, retry_at=None):
     message = str(exc) if isinstance(exc, SyncError) else "本地环境或数据异常，请检查安装及文件权限。"
-    save_json(ROOT / "data/status.json", {"ok": False, "checked_at": datetime.now(TZ).isoformat(),
-              "error": message, "requires_login": isinstance(exc, LoginRequired)})
+    status = {"ok": False, "checked_at": datetime.now(TZ).isoformat(),
+              "error": message, "requires_login": isinstance(exc, LoginRequired)}
+    if retry_at is not None:
+        status["retry_at"] = retry_at.isoformat(timespec="seconds")
+        status["server_wait"] = isinstance(exc, RateLimited)
+    save_json(ROOT / "data/status.json", status)
     print(message, file=sys.stderr, flush=True)
     return 2 if isinstance(exc, LoginRequired) else 1
 
@@ -827,7 +867,7 @@ class SyncSession:
 
         try:
             return check_with_login(check, self.client)
-        except LoginRequired:
+        except (LoginRequired, TemporarySyncError):
             self.client = None
             raise
 
@@ -871,6 +911,8 @@ def watch():
             except (SyncError, OSError, ValueError) as exc:
                 failures += 1
                 delay = min(900, POLL_SECONDS * 2 ** min(failures - 1, 4))
+                if isinstance(exc, TemporarySyncError):
+                    delay = recovery_delay(failures)
                 if isinstance(exc, RateLimited):
                     delay = max(delay, exc.retry_after)
                 next_poll = time.monotonic() + delay

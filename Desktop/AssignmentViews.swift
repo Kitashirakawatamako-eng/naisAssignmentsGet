@@ -17,6 +17,9 @@ struct AssignmentWindow: View {
                     Image(systemName: "exclamationmark.circle")
                     Text(issue).frame(maxWidth: .infinity, alignment: .leading)
                     if store.needsLogin { Button("Login Settings") { store.settingsOpen = true } }
+                    else if let hint = store.syncRecoveryHint {
+                        Text(hint).foregroundStyle(.secondary).monospacedDigit()
+                    }
                 }
                 .font(.callout)
                 .padding(.horizontal, 22)
@@ -30,7 +33,7 @@ struct AssignmentWindow: View {
                     .background(panel)
             } detail: {
                 Group {
-                    if let task = rows.first(where: { $0.id == store.selectedID }) {
+                    if let task = (store.pinnedTasks + rows).first(where: { $0.id == store.selectedID }) {
                         TaskDetail(task: task, store: store).id(task.id)
                     } else {
                         Placeholder(icon: "doc.text.magnifyingglass", title: "Assignment Details", subtitle: "Select an assignment to view its details.")
@@ -133,19 +136,22 @@ struct AssignmentWindow: View {
                     Button("Sign In to School Account") { store.settingsOpen = true }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if rows.isEmpty {
+            } else if rows.isEmpty && store.pinnedTasks.isEmpty {
                 Placeholder(icon: "tray", title: store.snapshot.tasks.isEmpty ? "No Assignments Yet" : "No Matching Assignments",
                             subtitle: store.snapshot.tasks.isEmpty ? "Click Sync Now to fetch your school assignments." : "Try another date or change the filters.")
             } else {
+                let pinned = store.pinnedTasks
+                let shown = Set(pinned.map(\.id))
+                let other = rows.filter { !shown.contains($0.id) }
                 List(selection: $store.selectedID) {
-                    ForEach(store.filters.deadlineView ? TaskDay.deadlineGroups(rows) : TaskDay.groups(rows)) { day in
+                    if !pinned.isEmpty {
+                        Section("Pinned") {
+                            ForEach(pinned) { task in assignmentRow(task) }
+                        }
+                    }
+                    ForEach(store.filters.deadlineView ? TaskDay.deadlineGroups(other) : TaskDay.groups(other)) { day in
                         Section(day.label) {
-                            ForEach(day.tasks) { task in
-                                TaskListRow(task: task, now: store.now)
-                                    .tag(task.id)
-                                    .listRowInsets(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
-                                    .accessibilityElement(children: .combine)
-                            }
+                            ForEach(day.tasks) { task in assignmentRow(task) }
                         }
                     }
                 }
@@ -154,6 +160,14 @@ struct AssignmentWindow: View {
                 .accessibilityLabel("Assignment List")
             }
         }
+    }
+
+    private func assignmentRow(_ task: Assignment) -> some View {
+        TaskListRow(task: task, now: store.now, pin: store.pinState(task.id))
+            .tag(task.id)
+            .listRowInsets(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
+            .accessibilityElement(children: .combine)
+            .contextMenu { PinMenu(task: task, store: store) }
     }
 
     private func footer(count: Int, pending: Int) -> some View {
@@ -181,18 +195,60 @@ struct AssignmentWindow: View {
     }
 }
 
+private struct PinMenu: View {
+    let task: Assignment
+    @ObservedObject var store: AssignmentStore
+
+    var body: some View {
+        let state = store.pinState(task.id)
+        Menu {
+            Toggle("Pin Globally", isOn: choice(.global, state))
+            Toggle("Pin Within Filters", isOn: choice(.filtered, state))
+            if state != nil {
+                Divider()
+                Button { store.unpin(task.id) } label: {
+                    Label("Unpin", systemImage: "pin.slash")
+                }
+            }
+        } label: {
+            Label(state == nil ? "Pinned" : "Pinned", systemImage: state == .global ? "pin.fill" : "pin")
+        }
+    }
+
+    private func choice(_ scope: AssignmentStore.PinScope, _ state: AssignmentStore.PinScope?) -> Binding<Bool> {
+        Binding {
+            state == scope
+        } set: { on in
+            if on {
+                store.setPin(task.id, scope: scope)
+            } else if store.pinState(task.id) == scope {
+                store.unpin(task.id)
+            }
+        }
+    }
+}
+
 private struct TaskListRow: View {
     let task: Assignment
     let now: Date
+    var pin: AssignmentStore.PinScope? = nil
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(task.subject + " · " + task.statusLabel)
-                    .font(.caption)
-                    .foregroundStyle(prominence == .increased ? Color.white : Color.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    if let pin {
+                        Image(systemName: pin == .global ? "pin.fill" : "pin")
+                            .font(.system(size: 9))
+                            .foregroundStyle(prominence == .increased ? Color.white : jade)
+                            .help(pin == .global ? "Pin Globally" : "Pinned Within Filters")
+                    }
+                    Text(task.subject + " · " + task.statusLabel)
+                        .font(.caption)
+                        .foregroundStyle(prominence == .increased ? Color.white : Color.secondary)
+                        .lineLimit(1)
+                }
                 Text(task.brief)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(3)
@@ -235,7 +291,11 @@ private struct TaskDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 19) {
                 VStack(alignment: .leading, spacing: 9) {
-                    Text(task.subject).font(.subheadline.weight(.semibold)).foregroundStyle(jade)
+                    HStack {
+                        Text(task.subject).font(.subheadline.weight(.semibold)).foregroundStyle(jade)
+                        Spacer()
+                        PinMenu(task: task, store: store)
+                    }
                     Text(task.title).font(.system(size: 23, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
                     Text(task.statusLabel)

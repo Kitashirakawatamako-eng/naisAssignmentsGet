@@ -155,6 +155,7 @@ struct AssignmentSnapshot: Decodable {
     var autoLogin = false
     var hasSession = false
     var syncError: String? = nil
+    var retryAt: String? = nil
     var requiresLogin = false
     var timetable: Timetable? = nil
 }
