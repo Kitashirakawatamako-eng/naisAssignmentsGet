@@ -6,7 +6,7 @@ import sys
 import time
 
 import school_tasks as school
-from school_timetable import REFRESH_SECONDS, TIMETABLE_FILE, read_timetable, week_start
+from school_timetable import REFRESH_SECONDS, TIMETABLE_FILE, load_timetable, read_timetable, week_start
 from task_report import SUBJECT_NAMES, display_status, pending, submission_bucket, task_summary
 
 
@@ -18,14 +18,15 @@ def grade_label(grade):
     return f"{grade['score']} / {grade['total']}" if grade.get("total") else f"{grade['score']} 分"
 
 
-def snapshot(root):
-    latest = school.load_json(root / "reports/latest.json", {})
+def snapshot(root, model_dir=None):
+    latest = school.load_latest_report(root)
     checked_at = school.due_date(latest.get("checked_at"))
     daily = school.load_json(root / "data/report-days" / f"{checked_at:%Y-%m-%d}.json", {}) if checked_at else {}
     current = {task["id"]: task for task in latest.get("tasks", [])}
     notes = school.load_json(root / "data/任务中文备注.json", {})
     state = school.load_json(root / "data/state.json", {}).get("tasks", {})
-    model_dir = school.translation_model(root)
+    model_dir = model_dir or school.translation_model(root)
+    subjects = ({value: key for key, value in SUBJECT_NAMES.items()} if model_dir.name == "zh-en" else SUBJECT_NAMES)
     cards = []
     for ident, task in (daily | current).items():
         course = task["subject"]
@@ -37,7 +38,7 @@ def snapshot(root):
             assigned = school.due_date(state.get(ident, {}).get("first_seen"))
         due = school.due_date(task.get("due"))
         cards.append({
-            "id": ident, "course": course, "subject": SUBJECT_NAMES.get(course, course),
+            "id": ident, "course": course, "subject": subjects.get(course, course),
             "title": title, "brief": brief, "actions": actions, "submission": submission or None,
             "translated": translated, "original_title": task["title"], "original": task.get("content") or "",
             "detail_pending": bool(task.get("detail_pending")),
@@ -51,6 +52,10 @@ def snapshot(root):
         })
     status = school.load_json(root / "data/status.json", {})
     settings = school.load_json(root / ".private/auto-login.json", {})
+    timetable = load_timetable(root)
+    if timetable is not None:
+        timetable["courses"] = [dict(course, title=subjects.get(course["title"], course["title"]))
+                                for course in timetable["courses"]]
     return {
         "checked_at": checked_at.isoformat(timespec="seconds") if checked_at else None,
         "tasks": cards,
@@ -60,7 +65,7 @@ def snapshot(root):
         "sync_error": desktop_error(status.get("error")),
         "retry_at": status.get("retry_at"),
         "requires_login": bool(status.get("requires_login")),
-        "timetable": school.load_json(root / TIMETABLE_FILE, None),
+        "timetable": timetable,
     }
 
 
@@ -81,6 +86,7 @@ class DesktopBackend:
         self.root = school.ROOT
         self.session = school.SyncSession()
         self.worker = school.AttachmentWorker()
+        self.model_dir = school.translation_model(self.root)
         self.cached_stamp = None
         self.next_check = 0.0
         self.rate_limit_until = 0.0
@@ -99,11 +105,8 @@ class DesktopBackend:
             self.next_check = time.monotonic() + max(0, (retry_at - now).total_seconds())
             if status.get("server_wait"):
                 self.rate_limit_until = self.next_check
-        try:
-            timetable = school.load_json(self.root / TIMETABLE_FILE, {})
-        except (OSError, ValueError):
-            timetable = {}
-        if isinstance(timetable, dict):
+        timetable = load_timetable(self.root)
+        if timetable is not None:
             checked = school.due_date(timetable.get("checked_at"))
             if checked and timetable.get("start_day") == week_start(now.date()).isoformat():
                 age = (now - checked).total_seconds()
@@ -113,7 +116,7 @@ class DesktopBackend:
     def update_snapshot(self):
         paths = ("reports/latest.json", "data/status.json", "data/state.json",
                  "data/任务中文备注.json", ".private/session.json", ".private/auto-login.json", TIMETABLE_FILE)
-        stamp = []
+        stamp = [self.model_dir]
         for name in paths:
             try:
                 stat = (self.root / name).stat()
@@ -121,7 +124,7 @@ class DesktopBackend:
             except FileNotFoundError:
                 stamp.append(None)
         if stamp != self.cached_stamp:
-            emit("snapshot", data=snapshot(self.root))
+            emit("snapshot", data=snapshot(self.root, self.model_dir))
             self.cached_stamp = stamp
 
     def should_poll(self, now):
@@ -211,6 +214,9 @@ class DesktopBackend:
         requires_login = False
         try:
             if action == "poll":
+                language = request.get("language")
+                if language in ("en", "zh-Hans"):
+                    self.model_dir = self.model_dir.with_name("zh-en" if language == "en" else "en-zh")
                 self.update_snapshot()
                 if request.get("automatic"):
                     timetable_due = self.timetable_due()

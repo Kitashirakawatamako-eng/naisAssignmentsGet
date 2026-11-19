@@ -24,7 +24,12 @@ private enum AssistantKeychain {
             guard SecItemAdd(q as CFDictionary, nil) == errSecSuccess else { throw AssistantError.message("Could not save the API key in Keychain.") }
         } else if status != errSecSuccess { throw AssistantError.message("Could not update the API key in Keychain.") }
     }
-    static func remove() { SecItemDelete(query as CFDictionary) }
+    static func remove() throws {
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw AssistantError.message("Could not remove the API key from Keychain.")
+        }
+    }
 }
 
 enum AssistantError: LocalizedError {
@@ -47,15 +52,35 @@ enum HomeworkAIRequest {
             if ["png", "jpg", "jpeg", "webp"].contains(ext) {
                 let mime = ext == "jpg" ? "jpeg" : ext
                 result.append(["type": "image", "mime_type": "image/\(mime)", "data": data.base64EncodedString()])
-            } else if ["pdf", "docx"].contains(ext) {
-                let mime = ext == "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            } else if ext == "pdf" {
                 result.append(["type": "text", "text": "Attached file: \(file.lastPathComponent)"])
-                result.append(["type": "document", "mime_type": mime, "data": data.base64EncodedString()])
+                result.append(["type": "document", "mime_type": "application/pdf", "data": data.base64EncodedString()])
+            } else if ext == "docx" {
+                let text = try wordText(file)
+                total += max(0, text.utf8.count - data.count)
+                guard total <= 20_000_000 else { throw AssistantError.message("Choose at most 20 MB of attachments per request.") }
+                result.append(["type": "text", "text": "Attached file \(file.lastPathComponent):\n\(text)"])
             } else if ["txt", "md", "csv"].contains(ext), let text = String(data: data, encoding: .utf8) {
                 result.append(["type": "text", "text": "Attached file \(file.lastPathComponent):\n\(text)"])
             } else { throw AssistantError.message("Supported attachments: PDF, DOCX, PNG, JPG, WebP, UTF-8 TXT, MD, and CSV. Export other documents to PDF first.") }
         }
         return result
+    }
+    private static func wordText(_ file: URL) throws -> String {
+        let conversion = Process()
+        let output = Pipe()
+        conversion.executableURL = URL(fileURLWithPath: "/usr/bin/textutil")
+        conversion.arguments = ["-convert", "txt", "-stdout", "-format", "docx", file.path]
+        conversion.standardOutput = output
+        conversion.standardError = FileHandle.nullDevice
+        let failure = AssistantError.message("Could not read text from this DOCX. Export it to PDF if it contains images or diagrams.")
+        do { try conversion.run() } catch { throw failure }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        conversion.waitUntilExit()
+        guard conversion.terminationStatus == 0,
+              let text = String(data: data, encoding: .utf8),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw failure }
+        return text
     }
     static func output(_ json: [String: Any]) throws -> String {
         guard json["status"] as? String == "completed" else { throw AssistantError.message("The AI response was incomplete. Try again or use a smaller assignment.") }
@@ -63,6 +88,16 @@ enum HomeworkAIRequest {
         let text = blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined(separator: "\n")
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AssistantError.message("The AI did not return an answer file. No file was saved.") }
         return text
+    }
+}
+
+enum HomeworkReminders {
+    static func upcoming(_ tasks: [Assignment], at now: Date) -> [(task: Assignment, due: Date)] {
+        let future = tasks.compactMap { task -> (task: Assignment, due: Date)? in
+            guard task.pending, let due = Beijing.parse(task.due), due > now else { return nil }
+            return (task, due)
+        }.sorted { ($0.due, $0.task.id) < ($1.due, $1.task.id) }
+        return Array(future.prefix(48))
     }
 }
 
@@ -79,7 +114,9 @@ final class HomeworkAssistant: NSObject, ObservableObject, UNUserNotificationCen
     var reveal: (() -> Void)?
     let root: URL
     private var scheduleSignature = ""
+    private var reminderRetryAt = Date.distantPast
     private var scheduling: Task<Void, Never>?
+    private var authorization: Task<Void, Never>?
     private var generation: Task<Void, Never>?
     private let center = UNUserNotificationCenter.current()
     private let defaults = UserDefaults.standard
@@ -103,12 +140,19 @@ final class HomeworkAssistant: NSObject, ObservableObject, UNUserNotificationCen
             .filter { $0.pathExtension == "md" }.sorted { $0.lastPathComponent > $1.lastPathComponent }
     }
     func enableReminders(_ value: Bool) {
-        defaults.set(value, forKey: "aiReminders"); scheduleSignature = ""
+        defaults.set(value, forKey: "aiReminders")
+        scheduleSignature = ""
+        reminderRetryAt = .distantPast
+        authorization?.cancel()
         if !value {
-            scheduling?.cancel()
-            Task {
+            reminderNotice = nil
+            let previous = scheduling
+            previous?.cancel()
+            scheduling = Task {
+                await previous?.value
+                guard !Task.isCancelled, !enabled else { return }
                 let requests = await center.pendingNotificationRequests()
-                guard !enabled else { return }
+                guard !Task.isCancelled, !enabled else { return }
                 let ids = requests.filter { $0.identifier.hasPrefix("homework-") }.map(\.identifier)
                 center.removePendingNotificationRequests(withIdentifiers: ids)
                 let seen = Set(defaults.stringArray(forKey: "aiReminderLedger") ?? []).subtracting(ids)
@@ -116,51 +160,78 @@ final class HomeworkAssistant: NSObject, ObservableObject, UNUserNotificationCen
             }
             return
         }
-        Task {
+        authorization = Task {
             do {
                 let allowed = try await center.requestAuthorization(options: [.alert, .sound])
+                guard !Task.isCancelled, enabled else { return }
                 reminderNotice = allowed ? "Reminders enabled. Keep the app running to discover new deadlines." : "Notifications are disabled. Enable them for Assignment Overview in macOS System Settings."
-                if !allowed { defaults.set(false, forKey: "aiReminders") }
-                scheduleSignature = ""
+                if allowed { reminderRetryAt = .distantPast }
+                else { defaults.set(false, forKey: "aiReminders") }
             } catch {
+                guard !Task.isCancelled, enabled else { return }
                 defaults.set(false, forKey: "aiReminders")
                 reminderNotice = "Enable notifications for Assignment Overview in macOS System Settings. " + error.localizedDescription
             }
         }
     }
     func update(_ tasks: [Assignment]) {
-        guard enabled else { return }
-        let pending = tasks.filter { $0.pending && Beijing.parse($0.due) != nil }.sorted { ($0.due ?? "") < ($1.due ?? "") }.prefix(48)
-        let signature = pending.map { $0.id + ($0.due ?? "") }.joined(separator: "|") + ":\(leadHours)"
+        let now = Date()
+        guard enabled, now >= reminderRetryAt else { return }
+        let pending = HomeworkReminders.upcoming(tasks, at: now)
+        let hours = leadHours
+        let signature = pending.map { $0.task.id + "|" + ($0.task.due ?? "") }.joined(separator: "|") + ":\(hours)"
         guard signature != scheduleSignature else { return }
-        scheduleSignature = signature; scheduling?.cancel()
+        scheduleSignature = signature
+        let previous = scheduling
+        previous?.cancel()
         scheduling = Task {
+            await previous?.value
+            guard !Task.isCancelled, enabled else { return }
             let settings = await center.notificationSettings()
-            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { scheduleSignature = ""; return }
+            guard !Task.isCancelled, enabled else { return }
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+                scheduleSignature = ""
+                reminderRetryAt = Date().addingTimeInterval(30)
+                return
+            }
             var seen = Set(defaults.stringArray(forKey: "aiReminderLedger") ?? [])
             var valid: Set<String> = []
-            for item in pending {
-                let token = item.id + "|" + (item.due ?? "") + "|\(leadHours)"
+            var failure: String?
+            for (item, due) in pending {
+                guard !Task.isCancelled, enabled else { return }
+                guard due > Date() else { continue }
+                let token = item.id + "|" + (item.due ?? "") + "|\(hours)"
                 let id = "homework-" + SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
                 valid.insert(id)
-                guard !seen.contains(id), !Task.isCancelled, enabled, let due = Beijing.parse(item.due) else { continue }
+                guard !seen.contains(id) else { continue }
                 let content = UNMutableNotificationContent()
                 content.title = "Homework deadline approaching"
                 content.body = "\(item.title) — due \(Beijing.dateTime(due)). Open to approve AI help."
                 content.sound = .default; content.userInfo = ["assignmentID": item.id]
-                let seconds = max(1, due.addingTimeInterval(-Double(leadHours) * 3600).timeIntervalSinceNow)
+                let seconds = max(1, due.addingTimeInterval(-Double(hours) * 3600).timeIntervalSinceNow)
                 do {
                     try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: UNTimeIntervalNotificationTrigger(timeInterval: seconds, repeats: false)))
                     guard !Task.isCancelled, enabled else { center.removePendingNotificationRequests(withIdentifiers: [id]); return }
                     seen.insert(id)
                     defaults.set(Array(seen), forKey: "aiReminderLedger")
-                } catch { reminderNotice = "Could not schedule a reminder: \(error.localizedDescription)" }
+                } catch { failure = error.localizedDescription }
             }
             guard !Task.isCancelled, enabled else { return }
             let requests = await center.pendingNotificationRequests()
-            center.removePendingNotificationRequests(withIdentifiers: requests.filter { $0.identifier.hasPrefix("homework-") && !valid.contains($0.identifier) }.map(\.identifier))
+            guard !Task.isCancelled, enabled else { return }
+            let stale = requests.filter { $0.identifier.hasPrefix("homework-") && !valid.contains($0.identifier) }.map(\.identifier)
+            center.removePendingNotificationRequests(withIdentifiers: stale)
+            defaults.set(Array(seen.subtracting(stale)), forKey: "aiReminderLedger")
             let delivered = await center.deliveredNotifications()
+            guard !Task.isCancelled, enabled else { return }
             center.removeDeliveredNotifications(withIdentifiers: delivered.map { $0.request.identifier }.filter { $0.hasPrefix("homework-") && !valid.contains($0) })
+            if let failure {
+                reminderNotice = "Could not schedule a reminder: \(failure)"
+                scheduleSignature = ""
+                reminderRetryAt = Date().addingTimeInterval(30)
+            } else if reminderNotice?.hasPrefix("Could not schedule a reminder: ") == true {
+                reminderNotice = nil
+            }
         }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) { completionHandler([.banner, .sound]) }
@@ -247,11 +318,17 @@ struct HomeworkAISettings: View {
                     do { try AssistantKeychain.save(key.trimmingCharacters(in: .whitespacesAndNewlines)); UserDefaults.standard.set(true, forKey: "geminiFreeProjectConfirmed"); key = ""; freeProject = false; notice = "Gemini API key saved in Keychain." }
                     catch { notice = error.localizedDescription }
                 }.disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !freeProject)
-                Button("Remove API Key") { AssistantKeychain.remove(); UserDefaults.standard.set(false, forKey: "geminiFreeProjectConfirmed"); notice = "API key removed." }
+                Button("Remove API Key") {
+                    do {
+                        try AssistantKeychain.remove()
+                        UserDefaults.standard.set(false, forKey: "geminiFreeProjectConfirmed")
+                        notice = "API key removed."
+                    } catch { notice = error.localizedDescription }
+                }
             }
             Text("Approval sends assignment text and selected files to Google Gemini. Google may use free-tier content to improve its products.").font(.caption).foregroundStyle(.secondary)
-            if !notice.isEmpty { Text(notice).font(.caption) }
-            if let message = assistant.reminderNotice { Text(message).font(.caption) }
+            if !notice.isEmpty { Text(LocalizedStringKey(notice)).font(.caption) }
+            if let message = assistant.reminderNotice { Text(LocalizedStringKey(message)).font(.caption) }
         }.textFieldStyle(.roundedBorder)
     }
 }
@@ -260,7 +337,7 @@ struct HomeworkAIPanel: View {
     @ObservedObject var assistant: HomeworkAssistant
     @ObservedObject var store: AssignmentStore
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("interfaceLanguage") private var language = "en"
+    @AppStorage("interfaceLanguage") private var language = "zh-Hans"
     @State private var files: [URL] = []
     var selected: Assignment? { store.snapshot.tasks.first { $0.id == assistant.selectedID } }
     var body: some View {
@@ -298,7 +375,7 @@ struct HomeworkAIPanel: View {
                     if assistant.busy { ProgressView().controlSize(.small); Button("Cancel") { assistant.cancel() } }
                 }
             } else { Text("Choose an assignment, or sync to load the homework referenced by the reminder.") }
-            if let error = assistant.error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+            if let error = assistant.error { Text(LocalizedStringKey(error)).foregroundStyle(.orange).textSelection(.enabled) }
             if let url = assistant.resultURL {
                 Text("Answer file ready").font(.headline)
                 ScrollView { Text(assistant.resultText).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 160)
@@ -311,6 +388,11 @@ struct HomeworkAIPanel: View {
             }
         }.padding(22)
         }.frame(width: 660, height: 720).interactiveDismissDisabled(assistant.busy)
-        .onChange(of: assistant.selectedID) { _, _ in files = []; assistant.resultURL = nil; assistant.resultText = "" }
+        .onChange(of: assistant.selectedID) { _, _ in
+            files = []
+            assistant.error = nil
+            assistant.resultURL = nil
+            assistant.resultText = ""
+        }
     }
 }

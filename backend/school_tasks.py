@@ -56,7 +56,7 @@ HTTP_LINK = re.compile(r"""(?:https?://|(?<!:)//)[^\s<>"'，。；、！？（�
 
 def translation_model(root):
     bundled = os.environ.get("SP_ASSIGNMENTS_MODEL_DIR")
-    return Path(bundled) if bundled else root / ".models/zh-en"
+    return Path(bundled) if bundled else root / ".models/en-zh"
 
 
 class SyncError(Exception):
@@ -533,6 +533,14 @@ def load_json(path, default):
     return json.loads(path.read_text()) if path.is_file() else default
 
 
+def load_latest_report(root):
+    try:
+        report = load_json(root / "reports/latest.json", {})
+    except ValueError:
+        return {}
+    return report if isinstance(report, dict) else {}
+
+
 def archive_old_reports(root, day):
     report_dir = root / "reports"
     old_folder = report_dir / day
@@ -623,11 +631,7 @@ def sync(client, root=ROOT, now=None, *, semester=None, refresh_details=False, d
         state = json.loads(state_file.read_text()) if state_file.exists() else {"tasks": {}}
         initial = not state_file.exists()
         semester, rows = collect_list(client, since, semester)
-        try:
-            previous_report = load_json(root / "reports/latest.json", {})
-        except ValueError:
-            previous_report = {}
-        previous_tasks = previous_report.get("tasks") if isinstance(previous_report, dict) else None
+        previous_tasks = load_latest_report(root).get("tasks")
         pending_details = {task["id"] for task in (previous_tasks or []) if task.get("detail_pending")}
         tasks, changes, warnings = [], [], []
         excluded = state.setdefault("outside_window", {})

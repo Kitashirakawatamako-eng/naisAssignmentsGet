@@ -1,6 +1,6 @@
 # 作业速览
 
-在 Mac 上查看 [学校任务](https://naisstu.schoolis.cn/Home#!/task/list/) 和课表。应用用各自的学校账号同步作业、提交状态、已发布成绩及附件。英文要求在本机翻译，详情中可展开老师原文。
+在 Mac 上查看 [学校任务](https://naisstu.schoolis.cn/Home#!/task/list/) 和课表。应用用各自的学校账号同步作业、提交状态、已发布成绩及附件。可切换中英文界面，使用本机模型翻译任务要求，详情中可展开老师原文。
 
 ## 从 GitHub 安装
 
@@ -18,13 +18,15 @@
 - **置顶**可从任务详情或列表右键菜单开启，分两种：**全局置顶**不受当前筛选影响，始终显示在列表顶部；**仅当前筛选**只在任务符合筛选条件时置顶。列表里实心图钉表示全局，空心表示筛选内。置顶状态会留在本机。
 - **任务详情**包含要点、截止时间、老师原文、附件和已发布成绩。作业列表与详情之间的宽度可拖动，应用会记住位置。
 - **同步**在应用运行时按北京时间工作日 08:00–20:00 每分钟检查一次，也可以点 **立即同步**。只查询本月的新任务，按日更新本地记录。
-- **课表**可查看今天、本周和下周。在 Mac 菜单栏可以看当前与下一节课，也可在应用内打开 **课表小窗**。
+- **课表**可查看今天、本周和下周。在 Mac 菜单栏可以看当前与下一节课，也可在应用内打开 **课表小窗**。打开应用同步后，右键桌面，选择 **编辑小组件 → 作业速览 / Assignment Overview → 课表 / Timetable**。小组件提供小号和中号，点击可打开完整课表。
 
 连接暂时失败时，应用会保留上一次结果，并在同步时段自动重试。单条详情失败也会在下一轮补查。学校要求额外验证时，可以从设置打开学校登录窗口。图片和文档里的要求需要打开附件查看。
 
 ## 本机文件
 
 应用安装到 `~/Applications/作业速览.app`。任务、课表、已下载附件和登录会话保存在 `~/Library/Application Support/作业速览/`。自动登录凭据由 macOS 钥匙串保管。通过 Finder 的 **前往 → 前往文件夹** 可以打开这些位置。
+
+独立计划器 Fieldnotes 的源码与使用方式见 [PlannerWidget](PlannerWidget/README.md)。
 
 ## 源码
 
@@ -34,7 +36,7 @@
 - `tests/` 是离线测试。已有 Python 3.13 的开发环境可运行 `python3 -B -m unittest discover -s tests`。
 
 
-## Gemini homework assistant (local version 1.2.1)
+## Gemini homework assistant
 
 Open **Settings → AI Assistant → Get a free Gemini API key**. Create a key in Google AI Studio from a project on the **Free tier with billing disabled**. Paste it into the app, confirm that billing is disabled, and save it to macOS Keychain. Do not share your key in chat. The app cannot inspect project billing from a key; a billing-enabled project can incur charges, even for the same model. Regional availability and free quotas apply.
 
@@ -48,10 +50,10 @@ Answers are saved as Markdown drafts in the app data directory under **AI Homewo
 
 ## Appearance (local version 1.3.0)
 
-Open **Settings → Appearance** to independently choose **Ocean White** (white with green and blue accents) or **Classic Jade** (the original theme, following system light/dark mode), and **Pixel Anomalocaris** or **Original Icon**. Both preferences are saved across launches. The new icon updates the Dock immediately and applies a Finder custom icon without replacing signed resources. The original icon is preserved in `Desktop/ClassicIcon.icns`.
+Open **Settings → Appearance** to choose your theme and icon. A theme selects its matching icon, which you can change separately. The app restores your chosen Dock icon on launch. Changing the icon in Settings also applies a Finder custom icon. The original icon is preserved in `Desktop/ClassicIcon.icns`.
 
 ## Creature themes (local version 1.4.0)
 
-**Settings → Appearance** now includes **Little Otter** (cream surfaces, clear-water blue/teal accents, a floating pixel otter with a gently curved tail) and **Fossil Cove** (fossil ivory, moss green, sandstone accents, the preserved monochrome curled Anomalocaris). Both use flat colors, transparent mascot icons, and matching header mascots. Ocean White and Classic Jade remain available. Selecting a theme selects its matching icon; the icon can also be chosen separately. The first launch of this update selects Little Otter, and later launches retain your choices.
+**Settings → Appearance** now includes **Little Otter** (cream surfaces, clear-water blue/teal accents, a floating pixel otter with a gently curved tail) and **Fossil Cove** (fossil ivory, moss green, sandstone accents, the preserved monochrome curled Anomalocaris). Both use flat colors, transparent mascot icons, and matching header mascots. Ocean White and Classic Jade remain available. Selecting a theme selects its matching icon; the icon can also be chosen separately. Little Otter is the default. The app remembers your theme and icon choices.
 
 Little Otter and Fossil Cove include matching scenery inside their rounded app icons. Toggle **Icon background** in Appearance to choose the scenery tile or transparent mascot. Page backgrounds remain solid colors. All artwork is bundled locally.

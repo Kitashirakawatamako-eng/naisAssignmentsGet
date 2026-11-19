@@ -2,11 +2,31 @@
 from datetime import timedelta
 import hashlib
 
-from school_tasks import BASE, SyncError, due_date, unwrap
+from school_tasks import BASE, SyncError, due_date, load_json, unwrap
 from task_report import SUBJECT_NAMES
 
 TIMETABLE_FILE = "data/timetable.json"
 REFRESH_SECONDS = 30 * 60
+
+
+def load_timetable(root):
+    try:
+        timetable = load_json(root / TIMETABLE_FILE, None)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(timetable, dict) or not isinstance(timetable.get("courses"), list):
+        return None
+    if not all(due_date(timetable.get(key)) for key in ("checked_at", "start_day", "end_day")):
+        return None
+    for course in timetable["courses"]:
+        if not isinstance(course, dict) or not all(isinstance(course.get(key), str) for key in ("id", "title")):
+            return None
+        start, end = due_date(course.get("start_at")), due_date(course.get("end_at"))
+        if not start or not end or start >= end or not isinstance(course.get("temporary"), bool):
+            return None
+        if any(course.get(key) is not None and not isinstance(course[key], str) for key in ("teacher", "room")):
+            return None
+    return timetable
 
 
 def label(*values):

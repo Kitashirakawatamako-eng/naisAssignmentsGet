@@ -8,6 +8,12 @@ struct SchoolLesson: Decodable, Identifiable {
 
     var timeRange: String { "\(Beijing.clock(startAt))–\(Beijing.clock(endAt))" }
 
+    func compactStart(relativeTo now: Date) -> String {
+        let time = Beijing.clock(startAt)
+        if Beijing.calendar.isDate(startAt, inSameDayAs: now) { return time }
+        return Beijing.shortDay(startAt) + " " + time
+    }
+
     func timeAndRoom(relativeTo now: Date) -> String {
         let date = Beijing.calendar.isDate(startAt, inSameDayAs: now) ? "" : Beijing.shortDay(startAt) + " "
         return date + timeRange + (room.map { " · " + $0 } ?? "")

@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 SUBMISSION_STATES = {"2": "待提交", "3": "已提交", "4": "已批改", "5": "批改中"}
 OPEN_STATES = {"待提交", "未完成", "状态未知"}
-SUBJECT_NAMES = {"进阶数学": "Advanced Math"}
+SUBJECT_NAMES = {"Advanced Math": "进阶数学"}
 VIEW_LABELS = (("homework", "作业"), ("pending", "待办"), ("uncertain", "待确认"),
                ("records", "仅记录"), ("grades", "成绩"))
 GREETING = re.compile(r"^(?:各位同学|亲爱的同学们|同学们|各位好|大家好|dear (?:all|students)|hello everyone)[：:，,\s]+", re.I)
@@ -46,13 +46,21 @@ def mostly_chinese(text):
     return chinese_chars >= 2 and chinese_chars > english_words / 2
 
 
+def mostly_english(text):
+    english_words = len(re.findall(r"[a-zA-Z]{2,}", text))
+    chinese_chars = len(re.findall(r"[\u3400-\u9fff]", text))
+    return english_words >= 2 and english_words > chinese_chars / 2
+
+
 @lru_cache(maxsize=512)
 def translate_lines(model_dir, lines):
     model = load_translator(model_dir)
     if model is None:
         return lines, False
     tokenizer, translator = model
-    indices = [index for index, line in enumerate(lines) if mostly_chinese(line)]
+    to_english = model_dir.name == "zh-en"
+    should_translate = mostly_chinese if to_english else mostly_english
+    indices = [index for index, line in enumerate(lines) if should_translate(line)]
     if not indices:
         return lines, False
     try:
@@ -62,11 +70,11 @@ def translate_lines(model_dir, lines):
         for index, result in zip(indices, results):
             # SentencePiece's whitespace marker can survive decoding as a literal glyph.
             translated = tokenizer.decode(result.hypotheses[0]).replace("\u2581", " ").strip()
-            if not mostly_chinese(translated):
+            if translated and (mostly_english(translated) if to_english else re.search(r"[\u3400-\u9fff]", translated)):
                 numbers = re.findall(r"\d+(?:\.\d+)?", lines[index])
                 translated_numbers = re.findall(r"\d+(?:\.\d+)?", translated)
                 if any(number not in translated_numbers for number in numbers):
-                    translated = f"{translated} (Check question numbers against the original.)"
+                    translated = f"{translated}（题号或数字请核对原句：{lines[index]}）"
                 output[index] = translated
         return tuple(output), tuple(output) != lines
     except (RuntimeError, ValueError):
@@ -146,7 +154,9 @@ def task_brief(task, note, title, actions, submission):
         return title
 
     def clean(line):
-        line = re.sub(r" \(Check question numbers against the original\.\)$", "", line)
+        _, marker, original = line.partition("（题号或数字请核对原句：")
+        if marker:
+            line = original.removesuffix("）")
         return GREETING.sub("", " ".join(line.split())).strip(" 。；;")
 
     lines = [clean(line) for line in actions]
@@ -303,7 +313,7 @@ def render_html(day, daily_tasks, current_tasks, now, notes, model_dir, parse_da
             if submission else ""
         )
         origin = escape(task.get("content") or "老师未填写正文。")
-        translation_note = " (English translation)" if translated else ""
+        translation_note = "（含本机译文）" if translated else ""
         detail_notice = '<p class="secondary detail-block">学校详情暂未更新。</p>' if task.get("detail_pending") and task.get("content") else ""
         search = " ".join((brief, title, task["title"], subject, raw_subject, task.get("task_type", ""))).lower()
         row_hidden = "" if show_today else " hidden"

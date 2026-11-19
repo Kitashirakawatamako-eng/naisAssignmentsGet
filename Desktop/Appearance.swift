@@ -90,10 +90,10 @@ struct ThemeMascot: View {
         guard let url = Bundle.main.url(forResource: name, withExtension: "icns") else { return nil }
         return NSImage(contentsOf: url)
     }
-    @discardableResult static func apply(_ choice: String) -> Bool {
+    @discardableResult static func apply(_ choice: String, updateFinder: Bool = true) -> Bool {
         guard let image = image(choice) else { return false }
         NSApp.applicationIconImage = image
-        return NSWorkspace.shared.setIcon(image, forFile: Bundle.main.bundlePath, options: [])
+        return !updateFinder || NSWorkspace.shared.setIcon(image, forFile: Bundle.main.bundlePath, options: [])
     }
 }
 

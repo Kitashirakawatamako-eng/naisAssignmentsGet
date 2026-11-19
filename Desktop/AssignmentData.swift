@@ -60,8 +60,15 @@ struct AssignmentFilters: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        range = try values.decodeIfPresent(DateRange.self, forKey: .range) ?? .today
-        types = try values.decodeIfPresent(Set<TaskType>.self, forKey: .types) ?? [.homework]
+        let oldDates: [String: DateRange] = ["今天": .today, "昨天": .yesterday, "近 3 天": .three,
+                                             "近 7 天": .seven, "本月": .month]
+        let oldTypes: [String: TaskType] = ["作业": .homework, "待办": .pending, "成绩": .grades,
+                                            "仅记录": .records, "待确认": .uncertain]
+        let savedRange = try values.decodeIfPresent(String.self, forKey: .range) ?? ""
+        range = DateRange(rawValue: savedRange) ?? oldDates[savedRange] ?? .today
+        if let savedTypes = try values.decodeIfPresent([String].self, forKey: .types) {
+            types = Set(savedTypes.compactMap { TaskType(rawValue: $0) ?? oldTypes[$0] })
+        }
         courses = try values.decodeIfPresent(Set<String>.self, forKey: .courses) ?? []
         submissions = try values.decodeIfPresent(Set<Submission>.self, forKey: .submissions) ?? []
         quickFilters = try values.decodeIfPresent(Set<AssignmentQuickFilter>.self, forKey: .quickFilters) ?? []
@@ -73,11 +80,17 @@ struct AssignmentFilters: Codable, Equatable {
         (types == [.homework] ? 0 : max(types.count, 1)) + courses.count + submissions.count + quickFilters.count
     }
 
+    var usesAllAssignedDates: Bool {
+        deadlineView || !quickFilters.isDisjoint(with: [.overdue, .dueToday])
+    }
+
+    var effectiveRange: DateRange { usesAllAssignedDates ? .all : range }
+
     func apply(to tasks: [Assignment], now: Date) -> [Assignment] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         let dueFilters = quickFilters.intersection([.overdue, .dueToday])
         return tasks.filter { task in
-            (deadlineView || !dueFilters.isEmpty || range.contains(task.assignedDay, relativeTo: now))
+            effectiveRange.contains(task.assignedDay, relativeTo: now)
                 && (types.isEmpty || types.contains { $0.includes(task) })
                 && (courses.isEmpty || courses.contains(task.course))
                 && (submissions.isEmpty || submissions.contains { $0.rawValue == task.submissionBucket })
@@ -201,7 +214,16 @@ enum Beijing {
     private static let dateTimeFormat = formatter("MMM d HH:mm", locale: "en_US")
     private static let shortDayFormat = formatter("MMM d", locale: "en_US")
     private static let weekdayFormat = formatter("EEE")
+    private static let chineseCalendarFormat = formatter("M月d日 EEEE", locale: "zh_CN")
+    private static let chineseDateTimeFormat = formatter("M月d日 HH:mm", locale: "zh_CN")
+    private static let chineseShortDayFormat = formatter("M月d日", locale: "zh_CN")
+    private static let chineseWeekdayFormat = formatter("EEE", locale: "zh_CN")
     private static let exportFormat = formatter("yyyy-MM-dd HH:mm", locale: "en_US_POSIX")
+
+    private static var displaysChinese: Bool {
+        let language = UserDefaults.standard.string(forKey: "interfaceLanguage") ?? Locale.preferredLanguages.first
+        return language?.hasPrefix("zh") == true
+    }
 
     private static func formatter(_ pattern: String, locale: String = "en_US") -> DateFormatter {
         let formatter = DateFormatter()
@@ -215,39 +237,44 @@ enum Beijing {
     static func parse(_ value: String?) -> Date? { value.flatMap { iso.date(from: $0) } }
     static func parseDay(_ value: String) -> Date? { dayFormat.date(from: value) }
     static func day(_ date: Date) -> String { dayFormat.string(from: date) }
-    static func dayLabel(_ date: Date) -> String { calendarFormat.string(from: date) }
+    static func dayLabel(_ date: Date) -> String { (displaysChinese ? chineseCalendarFormat : calendarFormat).string(from: date) }
     static func clock(_ date: Date) -> String { clockFormat.string(from: date) }
-    static func dateTime(_ date: Date) -> String { dateTimeFormat.string(from: date) }
-    static func shortDay(_ date: Date) -> String { shortDayFormat.string(from: date) }
-    static func weekday(_ date: Date) -> String { weekdayFormat.string(from: date) }
+    static func dateTime(_ date: Date) -> String { (displaysChinese ? chineseDateTimeFormat : dateTimeFormat).string(from: date) }
+    static func shortDay(_ date: Date) -> String { (displaysChinese ? chineseShortDayFormat : shortDayFormat).string(from: date) }
+    static func weekday(_ date: Date) -> String { (displaysChinese ? chineseWeekdayFormat : weekdayFormat).string(from: date) }
     static func exportTime(_ date: Date) -> String { exportFormat.string(from: date) }
 
     static func dueLabel(_ date: Date, relativeTo now: Date) -> String {
-        if calendar.isDate(date, inSameDayAs: now) { return "Today \(clock(date))" }
+        if calendar.isDate(date, inSameDayAs: now) { return (displaysChinese ? "今天 " : "Today ") + clock(date) }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
-           calendar.isDate(date, inSameDayAs: tomorrow) { return "Tomorrow \(clock(date))" }
+           calendar.isDate(date, inSameDayAs: tomorrow) { return (displaysChinese ? "明天 " : "Tomorrow ") + clock(date) }
         return dateTime(date)
     }
 }
 
 enum MarkdownChecklist {
-    static func text(tasks: [Assignment], range: DateRange, now: Date) -> String {
+    static func text(tasks: [Assignment], range: DateRange, now: Date, inChinese: Bool = false) -> String {
         let pending = tasks.filter(\.pending)
-        var lines = ["# Assignment To-Do List", "", "\(Beijing.day(now)) · \(range.rawValue) · \(pending.count) tasks · China Standard Time"]
+        let chineseStrings = Bundle.main.url(forResource: "zh-Hans", withExtension: "lproj").flatMap(Bundle.init(url:))
+        let rangeName = inChinese ? (chineseStrings?.localizedString(forKey: range.rawValue, value: nil, table: nil) ?? range.rawValue) : range.rawValue
+        let count = inChinese ? "\(pending.count) 项待办 · 北京时间" : "\(pending.count) tasks · China Standard Time"
+        var lines = [inChinese ? "# 作业待办" : "# Assignment To-Do List", "", "\(Beijing.day(now)) · \(rangeName) · \(count)"]
         for day in TaskDay.groups(pending) {
-            lines += ["", "## \(day.id.isEmpty ? "Assignment date not specified" : day.id)", ""]
+            let heading = day.id.isEmpty ? (inChinese ? "布置日期未注明" : "Assignment date not specified") : day.id
+            lines += ["", "## \(heading)", ""]
             for task in day.tasks {
-                let deadline = Beijing.parse(task.due).map { "Due " + Beijing.exportTime($0) } ?? "No due date"
-                let overdue = task.overdue(at: now) ? " (Overdue)" : ""
+                let deadline = Beijing.parse(task.due).map { (inChinese ? "截止 " : "Due ") + Beijing.exportTime($0) }
+                    ?? (inChinese ? "未设截止日期" : "No due date")
+                let overdue = task.overdue(at: now) ? (inChinese ? "（逾期）" : " (Overdue)") : ""
                 lines.append("- [ ] **\(escape(task.subject))**: \(escape(task.brief)) · \(deadline)\(overdue)")
                 if let submission = task.submission, !task.brief.contains(submission) {
-                    lines.append("  - Submission: \(escape(submission))")
+                    lines.append((inChinese ? "  - 提交要求：" : "  - Submission: ") + escape(submission))
                 }
                 let links = task.attachments.compactMap { attachment -> String? in
                     guard let url = attachment.originalURL else { return nil }
                     return "[\(escape(attachment.name))](<\(url.absoluteString)>)"
                 }
-                if !links.isEmpty { lines.append("  - Attachments: " + links.joined(separator: ", ")) }
+                if !links.isEmpty { lines.append((inChinese ? "  - 附件：" : "  - Attachments: ") + links.joined(separator: ", ")) }
             }
         }
         return lines.joined(separator: "\n") + "\n"

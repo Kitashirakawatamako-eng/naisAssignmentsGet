@@ -19,7 +19,7 @@ private final class AppLifecycle: NSObject, NSApplicationDelegate {
 @MainActor
 struct HomeworkApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
-    @AppStorage("interfaceLanguage") private var interfaceLanguage = "en"
+    @AppStorage("interfaceLanguage") private var interfaceLanguage = "zh-Hans"
     @AppStorage("appearanceTheme") private var theme = "otter"
     @StateObject private var store: AssignmentStore
     @StateObject private var assistant: HomeworkAssistant
@@ -28,9 +28,14 @@ struct HomeworkApp: App {
     init() {
         signal(SIGPIPE, SIG_IGN)
         let preferences = UserDefaults.standard
+        preferences.register(defaults: ["interfaceLanguage": "zh-Hans"])
         if !preferences.bool(forKey: "creatureThemesIntroduced") {
-            preferences.set("otter", forKey: "appearanceTheme")
-            preferences.set("otter", forKey: "appearanceIcon")
+            if preferences.object(forKey: "appearanceTheme") == nil {
+                preferences.set("otter", forKey: "appearanceTheme")
+            }
+            if preferences.object(forKey: "appearanceIcon") == nil {
+                preferences.set("otter", forKey: "appearanceIcon")
+            }
             preferences.set(true, forKey: "creatureThemesIntroduced")
         }
         let root = FileManager.default.homeDirectoryForCurrentUser
@@ -55,6 +60,13 @@ struct HomeworkApp: App {
             .tint(jade)
             .environment(\.locale, Locale(identifier: interfaceLanguage))
             .onAppear(perform: connect)
+            .onOpenURL { url in
+                if url.scheme == "spassignments", url.host == "timetable" {
+                    store.page = .timetable
+                    openWindow(id: "assignments")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
         }
         .defaultSize(width: 1120, height: 710)
         .windowResizability(.contentMinSize)
@@ -71,6 +83,7 @@ struct HomeworkApp: App {
         }
         MenuBarExtra {
             TimetableMenu(store: store).modifier(AppearanceSurface())
+                .environment(\.locale, Locale(identifier: interfaceLanguage))
         } label: {
             TimetableMenuLabel(store: store)
                 .environment(\.locale, Locale(identifier: interfaceLanguage))
@@ -80,7 +93,7 @@ struct HomeworkApp: App {
     }
 
     private func connect() {
-        AppIconChoice.apply(UserDefaults.standard.string(forKey: "appearanceIcon") ?? "otter")
+        AppIconChoice.apply(UserDefaults.standard.string(forKey: "appearanceIcon") ?? "otter", updateFinder: false)
         lifecycle.store = store
         let open = openWindow
         lifecycle.timetablePanel.attach(store: store) { [weak store] in
