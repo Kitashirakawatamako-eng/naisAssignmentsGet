@@ -17,19 +17,20 @@ struct SchoolLoginSheet: View {
                 }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    .disabled(store.requesting)
                 Button(store.working == "verify" ? "Verifying…" : "Save Login") {
                     store.saveBrowserSession(cookies)
                 }
                 .disabled(cookies.isEmpty || store.requesting)
             }
             if let error = store.settingsIssue ?? pageError {
-                Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange)
+                Label(LocalizedStringKey(error), systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange)
             }
             SchoolLoginPage(receive: { cookies = $0 }, fail: { pageError = $0 })
         }
         .padding(14)
         .frame(minWidth: 560, idealWidth: 820, minHeight: 400, idealHeight: 530)
-        .interactiveDismissDisabled(store.working == "verify")
+        .interactiveDismissDisabled(store.requesting)
     }
 }
 

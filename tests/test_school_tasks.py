@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 import desktop_bridge
 import school_tasks as app
-from school_timetable import read_timetable
+from school_timetable import load_timetable, read_timetable
 from task_records import published_grade, task_metadata
 from task_report import translate_lines
 
@@ -65,15 +65,21 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
 
     def test_translated_text_drops_tokenizer_markers_and_keeps_real_underscores(self):
-        original = ("请上传 task_4.pdf 并完成第 4 题。", "Fill in: ____")
-        tokenizer, translator = MagicMock(), MagicMock()
-        tokenizer.decode.return_value = "▁Upload task_4.pdf▁and complete question 4.▁"
-        translator.translate_batch.return_value = [MagicMock(hypotheses=[["▁请"]])]
-        with tempfile.TemporaryDirectory() as directory:
-            with patch("task_report.load_translator", return_value=(tokenizer, translator)):
-                lines, translated = translate_lines(Path(directory), original)
-        self.assertTrue(translated)
-        self.assertEqual(lines, ("Upload task_4.pdf and complete question 4.", "Fill in: ____"))
+        cases = (
+            ("zh-en", "请上传 task_4.pdf 并完成第 4 题。", "▁Upload task_4.pdf▁and complete question 4.",
+             "Upload task_4.pdf and complete question 4."),
+            ("en-zh", "Upload task_4.pdf and complete question 4.", "▁请上传 task_4.pdf▁并完成第 4 题。",
+             "请上传 task_4.pdf 并完成第 4 题。"),
+        )
+        for direction, source, decoded, expected in cases:
+            with self.subTest(direction=direction), tempfile.TemporaryDirectory() as directory:
+                tokenizer, translator = MagicMock(), MagicMock()
+                tokenizer.decode.return_value = decoded
+                translator.translate_batch.return_value = [MagicMock(hypotheses=[["token"]])]
+                with patch("task_report.load_translator", return_value=(tokenizer, translator)):
+                    lines, translated = translate_lines(Path(directory) / direction, (source,))
+                self.assertTrue(translated)
+                self.assertEqual(lines, (expected,))
 
     def test_timetable_uses_beijing_weeks_and_keeps_only_real_class_times(self):
         math = {"scheduleType": 3, "name": "Advanced Math", "beginTime": "2026-11-11T00:00:00Z",
@@ -95,8 +101,16 @@ class SyncTests(unittest.TestCase):
             retry_read=True)
         math, temporary = timetable["courses"]
         self.assertEqual((math["title"], math["start_at"], math["teacher"], math["room"]),
-                         ("Advanced Math", "2026-11-11T08:00:00+08:00", "教师 A", "205"))
+                         ("进阶数学", "2026-11-11T08:00:00+08:00", "教师 A", "205"))
         self.assertTrue(temporary["temporary"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app.save_json(root / "data/timetable.json", timetable)
+            english = desktop_bridge.snapshot(root, root / "zh-en")["timetable"]
+            chinese = desktop_bridge.snapshot(root, root / "en-zh")["timetable"]
+            self.assertEqual(english["courses"][0]["title"], "Advanced Math")
+            self.assertEqual(chinese["courses"][0]["title"], "进阶数学")
 
     def test_desktop_reads_legacy_and_native_daily_records(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -367,6 +381,48 @@ class SyncTests(unittest.TestCase):
                     app.watch()
             self.assertEqual(polls, [0, 60])
             semester.assert_called_once()
+
+    def test_invalid_timetable_cache_does_not_block_initial_poll(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache = root / "data/timetable.json"
+            valid = {"checked_at": NOW.isoformat(timespec="seconds"), "start_day": "2026-11-09",
+                     "end_day": "2026-11-22", "courses": []}
+            for broken in ("{", "[]", "[1]", {**valid, "courses": [{"title": "Math"}]}):
+                with self.subTest(broken=broken):
+                    if isinstance(broken, str):
+                        cache.parent.mkdir(exist_ok=True)
+                        cache.write_text(broken)
+                    else:
+                        app.save_json(cache, broken)
+                    with (patch.object(app, "ROOT", root), patch.object(app, "AttachmentWorker"),
+                          patch.object(desktop_bridge, "emit")):
+                        backend = desktop_bridge.DesktopBackend()
+                        with patch.object(backend, "synchronize_timetable") as refresh:
+                            backend.handle({"action": "poll", "automatic": True})
+                        refresh.assert_called_once()
+                    self.assertIsNone(desktop_bridge.snapshot(root)["timetable"])
+            app.save_json(cache, valid)
+            self.assertEqual(load_timetable(root), valid)
+
+    def test_invalid_latest_report_does_not_block_automatic_sync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest = root / "reports/latest.json"
+            latest.parent.mkdir()
+            for broken in ("{", "[1]"):
+                with (self.subTest(broken=broken), patch.object(app, "ROOT", root),
+                      patch.object(desktop_bridge, "emit"), patch.object(app, "AttachmentWorker"),
+                      patch.object(desktop_bridge, "datetime", wraps=datetime) as wall_clock):
+                    wall_clock.now.return_value = NOW
+                    latest.write_text(broken)
+                    backend = desktop_bridge.DesktopBackend()
+                    backend.next_timetable = float("inf")
+                    with patch.object(backend.session, "run", side_effect=lambda now, **kwargs:
+                                      app.sync(FakeClient(), root, now, write_html=False)) as refresh:
+                        backend.handle({"action": "poll", "automatic": True})
+                        refresh.assert_called_once()
+                    self.assertTrue(desktop_bridge.snapshot(root)["tasks"])
 
     def test_desktop_recovers_automatically_and_clears_retry_notice(self):
         with tempfile.TemporaryDirectory() as tmp:

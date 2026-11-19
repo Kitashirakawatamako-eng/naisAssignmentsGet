@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import WidgetKit
 
 private struct BackendEvent: Decodable {
     let event: String
@@ -59,6 +60,8 @@ final class AssignmentStore: ObservableObject {
     private var process: Process?
     private var input: FileHandle?
     private var timer: Timer?
+    private var requestedAction: String?
+    private var reconnectAt = Date.distantPast
     private var refreshAfterRequest = false
     private var timetableAfterRequest = false
 
@@ -115,15 +118,13 @@ final class AssignmentStore: ObservableObject {
         case .global: globalPins.insert(id)
         case .filtered: filterPins.insert(id)
         }
+        keepSelection()
     }
 
     func unpin(_ id: String) {
         globalPins.remove(id)
         filterPins.remove(id)
-    }
-
-    func togglePin(_ id: String, scope: PinScope) {
-        if pinState(id) == scope { unpin(id) } else { setPin(id, scope: scope) }
+        keepSelection()
     }
 
     var needsSetup: Bool { !loading && !snapshot.hasSession && !snapshot.autoLogin }
@@ -148,18 +149,20 @@ final class AssignmentStore: ObservableObject {
 
     var syncRecoveryHint: String? {
         guard !needsLogin, let retry = Beijing.parse(snapshot.retryAt) else { return nil }
-        if working == "sync" { return "Retrying…" }
-        if !automatic { return "Automatic retry paused" }
-        if !inSchedule || !Self.inSchedule(at: max(now, retry)) { return "Will retry during sync hours" }
+        let chinese = defaults.string(forKey: "interfaceLanguage") != "en"
+        if working == "sync" { return chinese ? "正在重试…" : "Retrying…" }
+        if !automatic { return chinese ? "自动重试已暂停" : "Automatic retry paused" }
+        if !inSchedule || !Self.inSchedule(at: max(now, retry)) {
+            return chinese ? "将在同步时段重试" : "Will retry during sync hours"
+        }
         let seconds = retry.timeIntervalSince(now)
-        if seconds <= 0 { return "Waiting to retry" }
-        if seconds < 60 { return "Retrying in about \(Int(seconds.rounded(.up))) seconds" }
-        return "Retry scheduled for \(Beijing.clock(retry))"
-    }
-
-    var lastSync: String {
-        guard let date = Beijing.parse(snapshot.checkedAt) else { return "Not synced yet" }
-        return "Last synced \(Beijing.dueLabel(date, relativeTo: now))"
+        if seconds <= 0 { return chinese ? "等待自动重试" : "Waiting to retry" }
+        if seconds < 60 {
+            let remaining = Int(seconds.rounded(.up))
+            return chinese ? "约 \(remaining) 秒后自动重试" : "Retrying in about \(remaining) seconds"
+        }
+        let time = Beijing.clock(retry)
+        return chinese ? "预计 \(time) 自动重试" : "Retry scheduled for \(time)"
     }
 
     func start() {
@@ -177,6 +180,7 @@ final class AssignmentStore: ObservableObject {
         } catch {
             loading = false
             syncIssue = error.localizedDescription
+            reconnectAt = Date().addingTimeInterval(30)
         }
     }
 
@@ -197,8 +201,16 @@ final class AssignmentStore: ObservableObject {
         now = Date()
         if !loading { assistant.update(snapshot.tasks) }
         keepSelection()
-        if !requesting && !schoolLoginOpen {
-            send(["action": "poll", "automatic": automatic && !loading && !needsSetup])
+        if !requesting && !settingsOpen && !schoolLoginOpen {
+            if process == nil, automatic, now >= reconnectAt {
+                do { try connect() }
+                catch {
+                    syncIssue = error.localizedDescription
+                    reconnectAt = now.addingTimeInterval(30)
+                }
+            }
+            send(["action": "poll", "automatic": automatic && !loading && !needsSetup,
+                  "language": defaults.string(forKey: "interfaceLanguage") ?? "zh-Hans"])
         }
     }
 
@@ -236,11 +248,11 @@ final class AssignmentStore: ObservableObject {
         }
     }
 
-    func configure(name: String, password: String) {
-        guard !requesting else { return }
+    func configure(name: String, password: String) -> Bool {
+        guard !requesting else { return false }
         settingsIssue = nil
         settingsNotice = nil
-        send(["action": "configure", "name": name, "password": password])
+        return sendLoginRequest(["action": "configure", "name": name, "password": password])
     }
 
     func verifyLogin() {
@@ -253,7 +265,19 @@ final class AssignmentStore: ObservableObject {
     func saveBrowserSession(_ cookies: [[String: Any]]) {
         guard !requesting, !cookies.isEmpty else { return }
         settingsIssue = nil
-        send(["action": "verify", "cookies": cookies])
+        sendLoginRequest(["action": "verify", "cookies": cookies])
+    }
+
+    @discardableResult
+    private func sendLoginRequest(_ request: [String: Any]) -> Bool {
+        do {
+            if process == nil { try connect() }
+            if send(request) { return true }
+            settingsIssue = "The sync service stopped. Try verifying again."
+        } catch {
+            settingsIssue = error.localizedDescription
+        }
+        return false
     }
 
     func resetFilters() {
@@ -265,11 +289,12 @@ final class AssignmentStore: ObservableObject {
     func exportChecklist() {
         let tasks = rows
         guard tasks.contains(where: \.pending) else { return }
-        let text = MarkdownChecklist.text(tasks: tasks, range: filters.range, now: now)
+        let chinese = defaults.string(forKey: "interfaceLanguage") != "en"
+        let text = MarkdownChecklist.text(tasks: tasks, range: filters.effectiveRange, now: now, inChinese: chinese)
         let panel = NSSavePanel()
-        panel.title = "Export Assignment To-Do List"
+        panel.title = chinese ? "导出作业待办" : "Export Assignment To-Do List"
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
-        panel.nameFieldStringValue = "Assignment-To-Do-\(Beijing.day(now)).md"
+        panel.nameFieldStringValue = (chinese ? "作业待办-" : "Assignment-To-Do-") + "\(Beijing.day(now)).md"
         panel.canCreateDirectories = true
         let write: (NSApplication.ModalResponse) -> Void = { [weak self] result in
             guard result == .OK, let url = panel.url else { return }
@@ -308,7 +333,9 @@ final class AssignmentStore: ObservableObject {
 
     private func keepSelection() {
         let visible = rows
-        if let selectedID, globalPins.contains(selectedID) || visible.contains(where: { $0.id == selectedID }) { return }
+        if let selectedID,
+           visible.contains(where: { $0.id == selectedID }) ||
+            globalPinnedTasks.contains(where: { $0.id == selectedID }) { return }
         selectedID = pinnedTasks.first?.id ?? visible.first?.id
     }
 
@@ -344,7 +371,7 @@ final class AssignmentStore: ObservableObject {
                                   attributes: [.posixPermissions: 0o700])
         var environment = ProcessInfo.processInfo.environment
         environment["SP_ASSIGNMENTS_HOME"] = root.path
-        environment["SP_ASSIGNMENTS_MODEL_DIR"] = resources.appendingPathComponent("Models/zh-en").path
+        environment["SP_ASSIGNMENTS_MODEL_DIR"] = resources.appendingPathComponent("Models/en-zh").path
         environment["SSL_CERT_FILE"] = runtime.appendingPathComponent("lib/python3.13/site-packages/certifi/cacert.pem").path
         let child = Process()
         let stdin = Pipe()
@@ -360,7 +387,7 @@ final class AssignmentStore: ObservableObject {
         process = child
         input = stdin.fileHandleForWriting
         let reader = stdout.fileHandleForReading
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak child] in
             let decoder = Self.backendDecoder()
             var buffer = Data()
             while true {
@@ -371,10 +398,16 @@ final class AssignmentStore: ObservableObject {
                     let line = Data(buffer[..<end])
                     buffer.removeSubrange(...end)
                     guard let event = try? decoder.decode(BackendEvent.self, from: line) else { continue }
-                    DispatchQueue.main.async { self?.receive(event) }
+                    DispatchQueue.main.async {
+                        guard let self, let child, self.process === child else { return }
+                        self.receive(event)
+                    }
                 }
             }
-            DispatchQueue.main.async { self?.disconnected() }
+            DispatchQueue.main.async {
+                guard let self, let child, self.process === child else { return }
+                self.disconnected()
+            }
         }
     }
 
@@ -385,20 +418,29 @@ final class AssignmentStore: ObservableObject {
         return decoder
     }
 
-    private func send(_ request: [String: Any]) {
-        guard let input else { return }
+    @discardableResult
+    private func send(_ request: [String: Any]) -> Bool {
+        guard let input else { return false }
         do {
             var data = try JSONSerialization.data(withJSONObject: request)
             data.append(0x0a)
             try input.write(contentsOf: data)
             requesting = true
+            requestedAction = request["action"] as? String
+            return true
         } catch {
             disconnected()
+            return false
         }
     }
 
     private func disconnected() {
         guard process != nil else { return }
+        if requestedAction == "configure" || requestedAction == "verify" {
+            settingsIssue = "The sync service stopped. Try verifying again."
+        }
+        requestedAction = nil
+        reconnectAt = Date().addingTimeInterval(15)
         stopBackend()
         requesting = false
         loading = false
@@ -413,6 +455,9 @@ final class AssignmentStore: ObservableObject {
         switch event.event {
         case "snapshot":
             guard let data = event.data else { return }
+            if data.timetable?.checkedAt != snapshot.timetable?.checkedAt {
+                WidgetCenter.shared.reloadTimelines(ofKind: "TimetableWidget")
+            }
             snapshot = data
             syncIssue = data.syncError
             needsLogin = data.requiresLogin
@@ -422,6 +467,7 @@ final class AssignmentStore: ObservableObject {
             working = event.operation
         case "finished":
             requesting = false
+            requestedAction = nil
             working = nil
             loading = false
             if event.operation == "configure" || event.operation == "verify" {

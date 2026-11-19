@@ -22,7 +22,10 @@ MODEL_FILES = (
     "README.md", "metadata.json", "sentencepiece.model",
     "model/config.json", "model/shared_vocabulary.json", "model/model.bin",
 )
-MODEL_SHA256 = "62e7af5a3a48b530e47b7b3e5c78c2de79073ecd815750d2bf3ab35b4a67da2d"
+MODELS = {
+    "en-zh": "433e7c4f034d87fbe2353161e05f18646d7999452f801a4e1f0378522b9850ab",
+    "zh-en": "62e7af5a3a48b530e47b7b3e5c78c2de79073ecd815750d2bf3ab35b4a67da2d",
+}
 
 
 def run(*args, **kwargs):
@@ -30,17 +33,19 @@ def run(*args, **kwargs):
 
 
 def install_model(folder, archive):
-    print("Downloading the Chinese-to-English translation model…", flush=True)
+    direction = folder.name
+    package = f"translate-{direction.replace('-', '_')}-1_9"
+    print(f"Downloading the {direction} translation model…", flush=True)
     run("/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--retry", 2,
-        "--max-time", 240, "https://argos-net.com/v1/translate-zh_en-1_9.argosmodel", "-o", archive)
+        "--max-time", 240, f"https://argos-net.com/v1/{package}.argosmodel", "-o", archive)
     with archive.open("rb") as handle:
-        if file_digest(handle, "sha256").hexdigest() != MODEL_SHA256:
+        if file_digest(handle, "sha256").hexdigest() != MODELS[direction]:
             raise ValueError("Translation model checksum failed; installation stopped.")
     with ZipFile(archive) as model:
         for name in MODEL_FILES:
             target = folder / name
             target.parent.mkdir(parents=True, exist_ok=True)
-            with model.open("translate-zh_en-1_9/" + name) as before, target.open("wb") as after:
+            with model.open(f"{package}/" + name) as before, target.open("wb") as after:
                 shutil.copyfileobj(before, after)
 
 
@@ -65,6 +70,26 @@ def install_runtime(source_runtime, runtime):
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
+def build_widget(contents, cache, architecture):
+    source = SOURCE / "TimetableWidget"
+    bundle = contents / "PlugIns/TimetableWidget.appex"
+    executable = bundle / "Contents/MacOS/TimetableWidget"
+    executable.parent.mkdir(parents=True)
+    info = plistlib.loads((source / "Info.plist").read_bytes())
+    app = plistlib.loads((contents / "Info.plist").read_bytes())
+    for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+        info[key] = app[key]
+    (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+    for localization in source.glob("*.lproj"):
+        shutil.copytree(localization, bundle / "Contents/Resources" / localization.name)
+    run("/usr/bin/xcrun", "swiftc", "-O", "-swift-version", "5", "-parse-as-library",
+        "-application-extension", "-target", f"{architecture}-apple-macosx14.0",
+        "-module-cache-path", cache, SOURCE / "Desktop/AssignmentData.swift",
+        SOURCE / "Desktop/Timetable.swift", source / "TimetableWidget.swift", "-o", executable)
+    run("/usr/bin/codesign", "--force", "--sign", "-", "--entitlements",
+        source / "TimetableWidget.entitlements", bundle)
+
+
 def build_app(stage, runtime, architecture):
     bundle = stage / f"{APP_NAME}.app"
     contents = bundle / "Contents"
@@ -83,7 +108,8 @@ def build_app(stage, runtime, architecture):
     for name in BACKEND_FILES:
         shutil.copyfile(SOURCE / "backend" / name, backend / name)
     shutil.copyfile(SOURCE / "scripts/THIRD_PARTY.md", resources / "Third-Party Components.md")
-    install_model(resources / "Models/zh-en", stage / "model.zip")
+    for direction in MODELS:
+        install_model(resources / "Models" / direction, stage / f"{direction}.zip")
     (resources / "Python").mkdir()
     install_runtime(runtime, resources / "Python" / architecture)
 
@@ -93,6 +119,7 @@ def build_app(stage, runtime, architecture):
     run("/usr/bin/xcrun", "swiftc", "-O", "-swift-version", "5", "-parse-as-library",
         "-target", f"{architecture}-apple-macosx14.0", "-module-cache-path", cache,
         *sources, "-o", native / "AssignmentDesktop")
+    build_widget(contents, cache, architecture)
     run("/usr/bin/codesign", "--force", "--sign", "-", bundle)
     run("/usr/bin/codesign", "--verify", "--deep", "--strict", bundle)
     return bundle
@@ -146,27 +173,15 @@ def main():
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args()
     apps = args.app_dir.expanduser().resolve()
-    destination = apps / f"{APP_NAME}.app"
+    destination = apps / f"{LEGACY_APP_NAME}.app"
+    english = apps / f"{APP_NAME}.app"
+    if not destination.exists() and english.exists():
+        destination = english
     apps.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".sp-install-", dir=apps) as stage:
         stage = Path(stage)
         bundle = build_app(stage, args.runtime.resolve(), args.architecture)
-        legacy = apps / f"{LEGACY_APP_NAME}.app"
-        archived_legacy = stage / "previous-legacy.app"
-        if legacy.exists() and not destination.exists():
-            legacy_info = legacy / "Contents/Info.plist"
-            if legacy_info.is_file() and plistlib.loads(legacy_info.read_bytes()).get("CFBundleIdentifier") == APP_ID:
-                try:
-                    quit_installed_app(legacy, stage)
-                except subprocess.CalledProcessError:
-                    raise ValueError("The previous version is still running. Quit it and try again.") from None
-                legacy.rename(archived_legacy)
-        try:
-            install_app(bundle, destination, stage)
-        except OSError:
-            if archived_legacy.exists() and not legacy.exists():
-                archived_legacy.rename(legacy)
-            raise
+        install_app(bundle, destination, stage)
     print(f"Installation complete. {destination}", flush=True)
     if not args.no_open:
         run("/usr/bin/open", destination)

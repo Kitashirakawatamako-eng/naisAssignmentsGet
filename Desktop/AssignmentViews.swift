@@ -9,6 +9,8 @@ struct AssignmentWindow: View {
 
     var body: some View {
         let rows = store.rows
+        let filteredIDs = Set(rows.map(\.id))
+        let extraPins = store.globalPinnedTasks.filter { !filteredIDs.contains($0.id) }
         VStack(spacing: 0) {
             header
             controls
@@ -43,7 +45,7 @@ struct AssignmentWindow: View {
                 .background(backdrop)
             }
             Divider()
-            footer(count: rows.count, pending: rows.filter(\.pending).count)
+            footer(count: rows.count + extraPins.count, pending: (rows + extraPins).filter(\.pending).count)
         }
         .frame(minWidth: 850, minHeight: 560)
         .background(backdrop)
@@ -61,7 +63,7 @@ struct AssignmentWindow: View {
             DeskTabs(page: $store.page)
             Button("AI Assistant") { store.assistant.present(store.selectedID) }
             Button { store.sync() } label: {
-                Label(store.working == "sync" ? "Syncing…" : "Sync Now", systemImage: "arrow.clockwise")
+                Label(store.working == "sync" ? LocalizedStringKey("Syncing…") : "Sync Now", systemImage: "arrow.clockwise")
             }
             .disabled(store.working != nil)
             .keyboardShortcut("r", modifiers: .command)
@@ -78,12 +80,17 @@ struct AssignmentWindow: View {
     private var controls: some View {
         HStack(spacing: 9) {
             Toggle("Deadline View", isOn: $store.filters.deadlineView).toggleStyle(.button)
-            Picker("Assigned Date", selection: $store.filters.range) {
+            Picker("Assigned Date", selection: Binding(
+                get: { store.filters.effectiveRange },
+                set: { store.filters.range = $0 }
+            )) {
                 ForEach(DateRange.allCases) { range in Text(LocalizedStringKey(range.rawValue)).tag(range) }
             }
             .labelsHidden()
             .pickerStyle(.menu)
             .fixedSize()
+            .disabled(store.filters.usesAllAssignedDates)
+            .help("Deadline View and deadline filters include all assigned dates.")
             Spacer(minLength: 8)
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -146,7 +153,7 @@ struct AssignmentWindow: View {
                         }
                     }
                     ForEach(store.filters.deadlineView ? TaskDay.deadlineGroups(other) : TaskDay.groups(other)) { day in
-                        Section(day.label) {
+                        Section(LocalizedStringKey(day.label)) {
                             ForEach(day.tasks) { task in assignmentRow(task) }
                         }
                     }
@@ -177,7 +184,11 @@ struct AssignmentWindow: View {
                 Text(store.automatic ? (store.inSchedule ? "Automatic Sync On" : "Waiting for Sync Hours") : "Automatic Sync Paused")
             }
             Text("·")
-            Text(store.lastSync)
+            if let date = Beijing.parse(store.snapshot.checkedAt) {
+                Text("Last synced \(Beijing.dueLabel(date, relativeTo: store.now))")
+            } else {
+                Text("Not synced yet")
+            }
             if store.snapshot.warningCount > 0 {
                 Label("\(store.snapshot.warningCount) items to retry", systemImage: "exclamationmark.circle")
             }
@@ -199,7 +210,7 @@ private struct PinMenu: View {
         let state = store.pinState(task.id)
         Menu {
             Toggle("Pin Globally", isOn: choice(.global, state))
-            Toggle("Pin Within Filters", isOn: choice(.filtered, state))
+            Toggle("Pin in Filtered Results", isOn: choice(.filtered, state))
             if state != nil {
                 Divider()
                 Button { store.unpin(task.id) } label: {
@@ -207,7 +218,7 @@ private struct PinMenu: View {
                 }
             }
         } label: {
-            Label(state == nil ? "Pinned" : "Pinned", systemImage: state == .global ? "pin.fill" : "pin")
+            Label(state == nil ? "Pin" : "Pinned", systemImage: state == .global ? "pin.fill" : "pin")
         }
     }
 
@@ -238,13 +249,14 @@ private struct TaskListRow: View {
                         Image(systemName: pin == .global ? "pin.fill" : "pin")
                             .font(.system(size: 9))
                             .foregroundStyle(prominence == .increased ? Color.white : jade)
-                            .help(pin == .global ? "Pin Globally" : "Pinned Within Filters")
+                            .help(pin == .global ? "Pin Globally" : "Pin in Filtered Results")
                     }
-                    Text(task.subject + " · " + task.statusLabel)
-                        .font(.caption)
-                        .foregroundStyle(prominence == .increased ? Color.white : Color.secondary)
-                        .lineLimit(1)
+                    let status = Text(LocalizedStringKey(task.statusLabel))
+                    Text("\(task.subject) · \(status)")
                 }
+                .font(.caption)
+                .foregroundStyle(prominence == .increased ? Color.white : Color.secondary)
+                .lineLimit(1)
                 Text(task.brief)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(3)
@@ -294,15 +306,15 @@ private struct TaskDetail: View {
                     }
                     Text(task.title).font(.system(size: 23, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(task.statusLabel)
+                    Text(LocalizedStringKey(task.statusLabel))
                         .font(.caption.weight(.semibold)).foregroundStyle(jade)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(jade.opacity(0.12), in: Capsule())
                 }
                 HStack(alignment: .top, spacing: 18) {
-                    field("Assigned", task.assignedDay.flatMap(Beijing.parseDay).map(Beijing.dayLabel) ?? "Not specified")
+                    field("Assigned", task.assignedDay.flatMap(Beijing.parseDay).map(Beijing.dayLabel))
                     if task.kind != "record" {
-                        field("Due", Beijing.parse(task.due).map(Beijing.dateTime) ?? "Not specified", overdue: task.overdue(at: store.now))
+                        field("Due", Beijing.parse(task.due).map(Beijing.dateTime), overdue: task.overdue(at: store.now))
                     }
                     if let grade = task.grade { field("Grade", grade) }
                 }
@@ -313,7 +325,7 @@ private struct TaskDetail: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(task.translated ? "Assignment Instructions (English translation)" : "Assignment Instructions").font(.headline)
+                    Text(task.translated ? LocalizedStringKey("Assignment Instructions (With Translation)") : "Assignment Instructions").font(.headline)
                     ForEach(Array(task.actions.enumerated()), id: \.offset) { _, action in
                         HStack(alignment: .firstTextBaseline, spacing: 7) {
                             if task.actions.count > 1 { Text("•").foregroundStyle(jade) }
@@ -346,7 +358,7 @@ private struct TaskDetail: View {
                 }
                 Divider()
                 Button { store.open(schoolURL) } label: {
-                    Label("Open Assignment on School Website", systemImage: "arrow.up.right")
+                    Label("Open School Task List", systemImage: "arrow.up.right")
                 }
                 .buttonStyle(.link)
             }
@@ -358,12 +370,16 @@ private struct TaskDetail: View {
         .accessibilityLabel("Assignment Details")
     }
 
-    private func field(_ name: String, _ value: String, overdue: Bool = false) -> some View {
+    private func field(_ name: LocalizedStringKey, _ value: String?, overdue: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(name).font(.caption).foregroundStyle(.secondary)
-            Text(overdue ? value + " · Overdue" : value)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(overdue ? Color.orange : Color.primary)
+            Group {
+                if let value, overdue { Text("\(value) · Overdue") }
+                else if let value { Text(value) }
+                else { Text("Not specified") }
+            }
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(overdue ? Color.orange : Color.primary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -429,7 +445,7 @@ private struct AssignmentFilterPopover: View {
             Text("Task Type").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             LazyVGrid(columns: columns, alignment: .leading, spacing: 9) {
                 ForEach(TaskType.allCases) { type in
-                    Toggle(type.rawValue, isOn: membership(type, in: $store.filters.types))
+                    Toggle(LocalizedStringKey(type.rawValue), isOn: membership(type, in: $store.filters.types))
                 }
                 Button("All") { store.filters.types = [] }.buttonStyle(.link)
             }
@@ -475,6 +491,7 @@ struct AssignmentSettings: View {
                 Text("Settings").font(.title2.weight(.semibold))
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                    .disabled(store.working == "configure")
             }
             AppearanceSettings()
             Divider()
@@ -501,8 +518,7 @@ struct AssignmentSettings: View {
                         Text("Your login credentials are stored in your Mac's Keychain.").foregroundStyle(.secondary).font(.callout)
                         Spacer()
                         Button("Save and Verify") {
-                            store.configure(name: name, password: password)
-                            password = ""
+                            if store.configure(name: name, password: password) { password = "" }
                         }
                         .disabled(store.requesting || name.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
                     }
@@ -510,10 +526,10 @@ struct AssignmentSettings: View {
                 .textFieldStyle(.roundedBorder)
             }
             if let error = store.settingsIssue {
-                Label(error, systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                Label(LocalizedStringKey(error), systemImage: "exclamationmark.circle").foregroundStyle(.orange)
             }
             if let notice = store.settingsNotice {
-                Label(notice, systemImage: "checkmark").foregroundStyle(jade)
+                Label(LocalizedStringKey(notice), systemImage: "checkmark").foregroundStyle(jade)
             }
             HStack {
                 Button("School Login Window") { store.verifyLogin() }
@@ -521,6 +537,8 @@ struct AssignmentSettings: View {
                 if store.working == "configure" || store.working == "verify" {
                     ProgressView().controlSize(.small)
                     Text("Verifying…").foregroundStyle(.secondary)
+                } else if store.requesting {
+                    Text("Waiting for the current sync to finish.").foregroundStyle(.secondary)
                 } else {
                     Text("Use this if the school requires a verification code.").foregroundStyle(.secondary)
                 }

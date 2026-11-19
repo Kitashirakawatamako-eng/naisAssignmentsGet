@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct DeskTabs: View {
-    @AppStorage("interfaceLanguage") private var interfaceLanguage = "en"
+    @AppStorage("interfaceLanguage") private var interfaceLanguage = "zh-Hans"
     @Binding var page: DeskPage
 
     var body: some View {
@@ -93,8 +93,11 @@ struct TimetableWindow: View {
             Divider()
             HStack {
                 if store.working == "timetable" { ProgressView().controlSize(.small) }
-                Text(store.snapshot.timetable.map { "Timetable updated \(Beijing.dueLabel($0.checkedAt, relativeTo: store.now))" }
-                     ?? "Waiting for timetable sync")
+                if let timetable = store.snapshot.timetable {
+                    Text("Timetable updated \(Beijing.dueLabel(timetable.checkedAt, relativeTo: store.now))")
+                } else {
+                    Text("Waiting for timetable sync")
+                }
                 Spacer()
                 Text("China Standard Time")
             }
