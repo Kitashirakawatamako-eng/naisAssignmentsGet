@@ -20,13 +20,19 @@ private final class AppLifecycle: NSObject, NSApplicationDelegate {
 struct HomeworkApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
     @AppStorage("interfaceLanguage") private var interfaceLanguage = "en"
-    @AppStorage("appearanceTheme") private var theme = "ocean"
+    @AppStorage("appearanceTheme") private var theme = "otter"
     @StateObject private var store: AssignmentStore
     @StateObject private var assistant: HomeworkAssistant
     @Environment(\.openWindow) private var openWindow
 
     init() {
         signal(SIGPIPE, SIG_IGN)
+        let preferences = UserDefaults.standard
+        if !preferences.bool(forKey: "creatureThemesIntroduced") {
+            preferences.set("otter", forKey: "appearanceTheme")
+            preferences.set("otter", forKey: "appearanceIcon")
+            preferences.set(true, forKey: "creatureThemesIntroduced")
+        }
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/作业速览", isDirectory: true)
         let instance = AssignmentStore(root: root, resources: Bundle.main.resourceURL)
@@ -46,6 +52,7 @@ struct HomeworkApp: App {
             .sheet(isPresented: $store.settingsOpen) { AssignmentSettings(store: store, assistant: assistant) }
             .sheet(isPresented: $assistant.showPanel) { HomeworkAIPanel(assistant: assistant, store: store) }
             .preferredColorScheme(theme == "classic" ? nil : .light)
+            .tint(jade)
             .environment(\.locale, Locale(identifier: interfaceLanguage))
             .onAppear(perform: connect)
         }
@@ -73,7 +80,7 @@ struct HomeworkApp: App {
     }
 
     private func connect() {
-        AppIconChoice.apply(UserDefaults.standard.string(forKey: "appearanceIcon") ?? "creature")
+        AppIconChoice.apply(UserDefaults.standard.string(forKey: "appearanceIcon") ?? "otter")
         lifecycle.store = store
         let open = openWindow
         lifecycle.timetablePanel.attach(store: store) { [weak store] in

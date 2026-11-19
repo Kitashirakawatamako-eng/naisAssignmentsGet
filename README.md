@@ -49,3 +49,9 @@ Answers are saved as Markdown drafts in the app data directory under **AI Homewo
 ## Appearance (local version 1.3.0)
 
 Open **Settings → Appearance** to independently choose **Ocean White** (white with green and blue accents) or **Classic Jade** (the original theme, following system light/dark mode), and **Pixel Anomalocaris** or **Original Icon**. Both preferences are saved across launches. The new icon updates the Dock immediately and applies a Finder custom icon without replacing signed resources. The original icon is preserved in `Desktop/ClassicIcon.icns`.
+
+## Creature themes (local version 1.4.0)
+
+**Settings → Appearance** now includes **Little Otter** (cream surfaces, clear-water blue/teal accents, a floating pixel otter with a gently curved tail) and **Fossil Cove** (fossil ivory, moss green, sandstone accents, the preserved monochrome curled Anomalocaris). Both use flat colors, transparent mascot icons, and matching header mascots. Ocean White and Classic Jade remain available. Selecting a theme selects its matching icon; the icon can also be chosen separately. The first launch of this update selects Little Otter, and later launches retain your choices.
+
+Little Otter and Fossil Cove include matching scenery inside their rounded app icons. Toggle **Icon background** in Appearance to choose the scenery tile or transparent mascot. Page backgrounds remain solid colors. All artwork is bundled locally.

@@ -28,12 +28,7 @@ struct TimetableWindow: View {
         let days = range.days(relativeTo: store.now)
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Image(systemName: "calendar")
-                    .font(.system(size: 21, weight: .medium))
-                    .foregroundStyle(oceanBlue)
-                    .frame(width: 43, height: 43)
-                    .background(jade.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                    .accessibilityHidden(true)
+                ThemeMascot(fallback: "calendar")
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Timetable").font(.system(size: 27, weight: .semibold))
                     Text(Beijing.dayLabel(store.now)).font(.subheadline).foregroundStyle(.secondary)
@@ -57,6 +52,7 @@ struct TimetableWindow: View {
             .padding(.top, 16)
             .padding(.bottom, 14)
             .background(headerDecoration)
+        .overlay(alignment: .bottom) { if oceanTheme { Rectangle().fill(oceanBlue).frame(height: 2) } }
 
             HStack(alignment: .top, spacing: 10) {
                 LessonStatus(caption: "Current Class", lesson: store.currentLesson, now: store.now,

@@ -52,12 +52,7 @@ struct AssignmentWindow: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "checklist")
-                .font(.system(size: 21, weight: .medium))
-                .foregroundStyle(oceanBlue)
-                .frame(width: 43, height: 43)
-                .background(jade.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                .accessibilityHidden(true)
+            ThemeMascot(fallback: "checklist")
             VStack(alignment: .leading, spacing: 3) {
                 Text("Assignment Overview").font(.system(size: 27, weight: .semibold))
                 Text(Beijing.dayLabel(store.now)).font(.subheadline).foregroundStyle(.secondary)
@@ -77,6 +72,7 @@ struct AssignmentWindow: View {
         .padding(.top, 16)
         .padding(.bottom, 14)
         .background(headerDecoration)
+        .overlay(alignment: .bottom) { if oceanTheme { Rectangle().fill(oceanBlue).frame(height: 2) } }
     }
 
     private var controls: some View {
