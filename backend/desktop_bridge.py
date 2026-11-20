@@ -8,6 +8,10 @@ import time
 import school_tasks as school
 from school_timetable import REFRESH_SECONDS, TIMETABLE_FILE, load_timetable, read_timetable, week_start
 from task_report import SUBJECT_NAMES, display_status, pending, submission_bucket, task_summary
+from task_records import flag, published_grade
+
+GRADE_FILE = "data/semester-grades.json"
+GRADE_STATUS_FILE = "data/semester-grades-status.json"
 
 
 def grade_label(grade):
@@ -18,13 +22,96 @@ def grade_label(grade):
     return f"{grade['score']} / {grade['total']}" if grade.get("total") else f"{grade['score']} 分"
 
 
+def semester_grades(client, now):
+    semester = school.get_semester(client)
+    start = school.due_date(semester.get("startDate"))
+    end = school.due_date(semester.get("endDate"))
+    if start is None or end is None or not start.date() <= now.date() <= end.date():
+        raise school.SyncError("学校未提供可核对的当前学期日期，已保留上次成绩。")
+    rows = school.collect_term_rows(client, semester, start.date().isoformat(), end.date().isoformat())
+    records = []
+    for row in rows:
+        if not flag(row.get("isSynchroToMobiled")):
+            continue
+        grade = published_grade(row, {}) or {}
+        course = row.get("subjectName") or row.get("subjectEName") or "未标明科目"
+        day = school.due_date(row.get("beginTime"))
+        if day and not start.date() <= day.date() <= end.date():
+            continue
+        records.append({"id": str(row["id"]), "course": course, "title": row.get("name") or "未命名任务",
+                        "day": day.date().isoformat() if day else None,
+                        "category": row.get("typeName") or row.get("typeEName") or "",
+                        "exempt": flag(row.get("isExempt")) or row.get("finishState") in (6, "6"), **grade})
+    return {"semester_id": str(semester["id"]), "start_day": start.date().isoformat(),
+            "end_day": end.date().isoformat(), "checked_at": now.isoformat(), "records": records,
+            "source_published_count": len(records)}
+
+
+def grade_snapshot(root, state, subjects):
+    try:
+        imported = school.load_json(root / GRADE_FILE, {})
+    except (OSError, ValueError):
+        imported = {}
+    if not isinstance(imported, dict):
+        imported = {}
+    local_semester = state.get("semester_id")
+    external_at = school.due_date(imported.get("checked_at"))
+    local_at = school.due_date(state.get("last_success"))
+    other_semester = local_semester is not None and imported.get("semester_id") != str(local_semester)
+    if other_semester and (external_at is None or (local_at and local_at > external_at)):
+        imported = {}
+    history = imported.get("records", [])
+    if not isinstance(history, list) or any(
+        not isinstance(record, dict) or
+        not all(isinstance(record.get(key), str) for key in ("id", "course", "title", "category")) or
+        not isinstance(record.get("exempt"), bool) or
+        any(record.get(key) is not None and not isinstance(record[key], str) for key in ("day", "score", "total", "level"))
+        for record in history
+    ):
+        imported = {}
+        history = []
+    merge_local = not (imported and other_semester)
+    lower = imported.get("start_day") or state.get("semester_start")
+    upper = imported.get("end_day") or state.get("semester_end")
+    imported_at = school.due_date(imported.get("checked_at"))
+    cached = {record["id"]: record for record in history}
+    for ident, entry in (state.get("tasks", {}) if merge_local else {}).items():
+        task = entry.get("task") or {}
+        day = school.due_date(task.get("published")) or school.due_date(task.get("started"))
+        day = day.date().isoformat() if day else None
+        if day and ((lower and day < lower) or (upper and day > upper)):
+            continue
+        grade = task.get("grade")
+        last_seen = school.due_date(entry.get("last_seen") or entry.get("first_seen"))
+        if ident in cached and imported_at and (not last_seen or last_seen < imported_at):
+            continue
+        if not grade:
+            cached.pop(ident, None)
+            continue
+        cached[ident] = {"id": ident, "course": task["subject"], "title": task["title"], "day": day,
+                         "category": task.get("task_type") or "", "exempt": task.get("status") == "免交", **grade}
+    records = [dict(record, subject=subjects.get(record["course"], record["course"])) for record in cached.values()]
+    try:
+        status = school.load_json(root / GRADE_STATUS_FILE, {})
+    except (OSError, ValueError):
+        status = {}
+    if not isinstance(status, dict):
+        status = {}
+    return {"semester_id": imported.get("semester_id") or (str(local_semester) if local_semester is not None else None),
+            "start_day": lower, "end_day": upper, "checked_at": imported.get("checked_at"),
+            "last_attempt_at": status.get("attempted_at"), "sync_issue": status.get("error"),
+            "source_published_count": imported.get("source_published_count"),
+            "records": sorted(records, key=lambda x: (x.get("day") or "", x["id"]), reverse=True)}
+
+
 def snapshot(root, model_dir=None):
     latest = school.load_latest_report(root)
     checked_at = school.due_date(latest.get("checked_at"))
     daily = school.load_json(root / "data/report-days" / f"{checked_at:%Y-%m-%d}.json", {}) if checked_at else {}
     current = {task["id"]: task for task in latest.get("tasks", [])}
     notes = school.load_json(root / "data/任务中文备注.json", {})
-    state = school.load_json(root / "data/state.json", {}).get("tasks", {})
+    archive = school.load_json(root / "data/state.json", {})
+    state = archive.get("tasks", {})
     model_dir = model_dir or school.translation_model(root)
     subjects = ({value: key for key, value in SUBJECT_NAMES.items()} if model_dir.name == "zh-en" else SUBJECT_NAMES)
     cards = []
@@ -66,6 +153,7 @@ def snapshot(root, model_dir=None):
         "retry_at": status.get("retry_at"),
         "requires_login": bool(status.get("requires_login")),
         "timetable": timetable,
+        "grade_book": grade_snapshot(root, archive, subjects),
     }
 
 
@@ -115,7 +203,8 @@ class DesktopBackend:
 
     def update_snapshot(self):
         paths = ("reports/latest.json", "data/status.json", "data/state.json",
-                 "data/任务中文备注.json", ".private/session.json", ".private/auto-login.json", TIMETABLE_FILE)
+                 "data/任务中文备注.json", ".private/session.json", ".private/auto-login.json", TIMETABLE_FILE,
+                 GRADE_FILE, GRADE_STATUS_FILE)
         stamp = [self.model_dir]
         for name in paths:
             try:
@@ -234,6 +323,17 @@ class DesktopBackend:
                 self.synchronize(now, manual=True)
             elif action == "timetable":
                 self.synchronize_timetable(now)
+            elif action == "grades":
+                started = time.monotonic()
+                if started < self.rate_limit_until:
+                    raise school.RateLimited(self.rate_limit_until - started)
+                emit("working", operation="grades")
+                try:
+                    grades = school.check_with_login(lambda client: semester_grades(client, now))
+                    school.save_json(self.root / GRADE_FILE, grades)
+                except school.RateLimited as exc:
+                    self.wait_for_server(exc)
+                    raise
             elif action == "configure":
                 emit("working", operation="configure")
                 school.configure_auto_login(request["name"], request.pop("password"))
@@ -250,6 +350,11 @@ class DesktopBackend:
         except (OSError, ValueError, KeyError):
             error = "本地数据或同步环境暂时无法读取。"
         finally:
+            if operation == "grades":
+                try:
+                    school.save_json(self.root / GRADE_STATUS_FILE, {"attempted_at": now.isoformat(), "error": error})
+                except OSError:
+                    error = error or "无法写入成绩同步状态。"
             try:
                 self.update_snapshot()
             except (OSError, ValueError, KeyError):

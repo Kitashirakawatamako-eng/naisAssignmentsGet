@@ -2,8 +2,10 @@
 from argparse import ArgumentParser
 from hashlib import file_digest
 from pathlib import Path
+import os
 import plistlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -14,6 +16,8 @@ SOURCE = Path(__file__).resolve().parents[1]
 APP_ID = "local.spassignments.desktop"
 APP_NAME = "Assignment Overview"
 LEGACY_APP_NAME = "作业速览"
+WIDGET_BUNDLE = Path("Contents/PlugIns/TimetableWidget.appex")
+WIDGET_BINARY = WIDGET_BUNDLE / "Contents/MacOS/TimetableWidget"
 BACKEND_FILES = (
     "desktop_bridge.py", "school_tasks.py", "school_keychain.py", "school_timetable.py",
     "task_records.py", "task_report.py", "report_template.html",
@@ -82,9 +86,13 @@ def build_widget(contents, cache, architecture):
     (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     for localization in source.glob("*.lproj"):
         shutil.copytree(localization, bundle / "Contents/Resources" / localization.name)
+    # Keep the Swift widget bundle linked while Foundation serves the XPC requests.
     run("/usr/bin/xcrun", "swiftc", "-O", "-swift-version", "5", "-parse-as-library",
         "-application-extension", "-target", f"{architecture}-apple-macosx14.0",
-        "-module-cache-path", cache, SOURCE / "Desktop/AssignmentData.swift",
+        "-framework", "Foundation", "-Xlinker", "-e", "-Xlinker", "_NSExtensionMain",
+        "-Xlinker", "-u", "-Xlinker", "_main",
+        "-module-cache-path", cache, SOURCE / "Desktop/AssignmentData.swift", SOURCE / "Desktop/GPAData.swift",
+        SOURCE / "Desktop/DeskTheme.swift", SOURCE / "Desktop/WidgetSnapshot.swift",
         SOURCE / "Desktop/Timetable.swift", source / "TimetableWidget.swift", "-o", executable)
     run("/usr/bin/codesign", "--force", "--sign", "-", "--entitlements",
         source / "TimetableWidget.entitlements", bundle)
@@ -99,7 +107,8 @@ def build_app(stage, runtime, architecture):
     resources.mkdir()
     shutil.copyfile(SOURCE / "Desktop/Info.plist", contents / "Info.plist")
     shutil.copyfile(SOURCE / "Desktop/AppIcon.icns", resources / "AppIcon.icns")
-    for name in ["ClassicIcon.icns", "CreatureIcon.icns", "OtterIcon.icns", "OtterTransparentIcon.icns", "CreatureTransparentIcon.icns"]:
+    for name in ("ClassicIcon.icns", "OtterTransparentIcon.icns", "CreatureTransparentIcon.icns",
+                 "OtterTransparentIconSource.png", "CreatureTransparentIconSource.png", "OtterBackground.png", "PaleoBackground.png"):
         shutil.copyfile(SOURCE / "Desktop" / name, resources / name)
     for localization in (SOURCE / "Desktop").glob("*.lproj"):
         shutil.copytree(localization, resources / localization.name)
@@ -144,6 +153,27 @@ guard apps.allSatisfy(\.isTerminated) else { exit(2) }
         input=script, text=True)
 
 
+def stop_retired_widget(previous, destination):
+    retired = previous / WIDGET_BINARY
+    if not retired.is_file():
+        return
+    # WidgetKit may keep the old executable mapped after the bundle was replaced.
+    mapped = subprocess.run(["/usr/sbin/lsof", "-a", "-d", "txt", "-t", str(retired)],
+                            capture_output=True, text=True)
+    valid_paths = {retired.resolve(), (destination / WIDGET_BINARY).resolve()}
+    for pid in mapped.stdout.splitlines():
+        if not pid.isdecimal():
+            continue
+        process = subprocess.run(["/bin/ps", "-p", pid, "-o", "comm="], capture_output=True, text=True)
+        executable = process.stdout.strip()
+        if not executable or Path(executable).resolve() not in valid_paths:
+            continue
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def install_app(bundle, destination, stage):
     if destination.is_symlink():
         raise ValueError("A same-named alias already exists in Applications. Move it and try again.")
@@ -163,6 +193,12 @@ def install_app(bundle, destination, stage):
         if previous.exists():
             previous.rename(destination)
         raise
+    stop_retired_widget(previous, destination)
+    widget = destination / WIDGET_BUNDLE
+    if widget.is_dir():
+        registration = subprocess.run(["/usr/bin/pluginkit", "-a", str(widget)], capture_output=True, text=True)
+        if registration.returncode:
+            print("Widget registration will be retried by macOS when the app opens.", file=sys.stderr)
 
 
 def main():

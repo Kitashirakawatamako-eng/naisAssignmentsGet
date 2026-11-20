@@ -4,9 +4,11 @@
     <key>CFBundleIdentifier</key><string>local.spassignments.desktop.timetable</string>
     <key>CFBundleExecutable</key><string>TimetableWidget</string>
     <key>CFBundleName</key><string>TimetableWidget</string>
-    <key>CFBundleDisplayName</key><string>Timetable</string>
+    <key>CFBundleDisplayName</key><string>Assignment Overview</string>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>XPC!</string>
+    <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSExtension</key><dict>
         <key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string>

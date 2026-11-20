@@ -52,6 +52,10 @@ final class AssignmentStore: ObservableObject {
     @Published private(set) var settingsNotice: String?
     @Published private(set) var timetableIssue: String?
     @Published private(set) var timetableNeedsLogin = false
+    @Published private(set) var gradeIssue: String?
+    @Published private(set) var importedGrades: GradeImportStorage
+    @Published private(set) var attachmentFolder = AttachmentLibrary.defaultFolder
+    @Published private(set) var attachmentIssue: String?
 
     let assistant: HomeworkAssistant
     let root: URL
@@ -62,13 +66,22 @@ final class AssignmentStore: ObservableObject {
     private var timer: Timer?
     private var requestedAction: String?
     private var reconnectAt = Date.distantPast
+    private var publishedWidgetData: Data?
+    private var pendingWidgetAssignment: String?
+    private var linkedAssignmentID: String?
+    private var attachmentCopyJob: Task<Void, Never>?
+    private var plannedAttachmentCopies: Set<AttachmentCopy> = []
     private var refreshAfterRequest = false
     private var timetableAfterRequest = false
 
     init(root: URL, resources: URL? = nil) {
+        self.importedGrades = GradeImportStorage.read(in: root)
         self.assistant = HomeworkAssistant(root: root)
         self.root = root
         self.resources = resources
+        if let path = UserDefaults.standard.string(forKey: "attachmentFolder"), path.hasPrefix("/") {
+            attachmentFolder = URL(fileURLWithPath: path, isDirectory: true)
+        }
         let data = UserDefaults.standard.data(forKey: "filters")
         filters = data.flatMap { try? JSONDecoder().decode(AssignmentFilters.self, from: $0) } ?? AssignmentFilters()
         automatic = UserDefaults.standard.object(forKey: "automatic") as? Bool ?? true
@@ -88,6 +101,7 @@ final class AssignmentStore: ObservableObject {
 
     var rows: [Assignment] { filters.apply(to: snapshot.tasks, now: now) }
     var pendingCount: Int { rows.filter(\.pending).count }
+    var selectedTask: Assignment? { snapshot.tasks.first { $0.id == selectedID } }
     var globalPinnedTasks: [Assignment] {
         Self.pinnedOrder(snapshot.tasks.filter { globalPins.contains($0.id) })
     }
@@ -187,6 +201,7 @@ final class AssignmentStore: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+        attachmentCopyJob?.cancel()
         stopBackend()
     }
 
@@ -201,6 +216,7 @@ final class AssignmentStore: ObservableObject {
         now = Date()
         if !loading { assistant.update(snapshot.tasks) }
         keepSelection()
+        publishWidgets()
         if !requesting && !settingsOpen && !schoolLoginOpen {
             if process == nil, automatic, now >= reconnectAt {
                 do { try connect() }
@@ -246,6 +262,40 @@ final class AssignmentStore: ObservableObject {
         } else {
             send(["action": "timetable"])
         }
+    }
+
+    func syncSemesterGrades() {
+        guard !requesting else { return }
+        if needsSetup { settingsOpen = true; return }
+        do {
+            if process == nil { try connect() }
+            gradeIssue = nil
+            if !send(["action": "grades"]) { gradeIssue = "The grade sync service stopped. Try again." }
+        } catch { gradeIssue = error.localizedDescription }
+    }
+
+    func saveGradeImport(_ records: [ImportedGrade], term: String) throws {
+        var next = importedGrades
+        next.terms[term] = records
+        try next.save(in: root)
+        importedGrades = next
+    }
+
+    func copyGradeDiagnostics() {
+        let book = snapshot.gradeBook
+        let rows = book?.records ?? []
+        let categoryGroups = Dictionary(grouping: rows, by: \.course).values.reduce(0) {
+            $0 + Set($1.map(\.group)).count
+        }
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let status = gradeIssue ?? book?.syncIssue ?? "—"
+        let lines = ["作业速览 \(version) · 成绩同步诊断", "学期：\(book?.startDay ?? "—") 至 \(book?.endDay ?? "—")",
+                     "最近尝试：\(book?.lastAttemptAt ?? "—")", "上次成功：\(book?.checkedAt ?? "—")",
+                     "学校返回条数：\(book?.sourcePublishedCount.map(String.init) ?? "—")",
+                     "当前可读：\(rows.count) 项，\(Set(rows.map(\.course)).count) 科，\(categoryGroups) 个科目与类别组合",
+                     "同步状态：\(status)"]
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }
 
     func configure(name: String, password: String) -> Bool {
@@ -311,15 +361,66 @@ final class AssignmentStore: ObservableObject {
         }
     }
 
-    func localURL(for attachment: Attachment) -> URL? {
-        guard let path = attachment.localPath else { return nil }
-        let folder = root.appendingPathComponent("data/tasks").resolvingSymlinksInPath().standardizedFileURL
-        let file = root.appendingPathComponent(path).resolvingSymlinksInPath().standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard file.path.hasPrefix(folder.path + "/"),
-              FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory), !isDirectory.boolValue
-        else { return nil }
-        return file
+    func localURL(for attachment: Attachment, in task: Assignment) -> URL? {
+        guard let source = AttachmentLibrary.source(for: attachment, in: root) else { return nil }
+        let copy = AttachmentLibrary.copies(for: task, in: root, to: attachmentFolder).first { $0.source == source }
+        return copy.flatMap { AttachmentLibrary.readableCopy($0, in: attachmentFolder) } ?? source
+    }
+
+    func chooseAttachmentFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = attachmentFolder
+        panel.begin { [weak self] response in
+            guard response == .OK, let folder = panel.url else { return }
+            self?.setAttachmentFolder(folder)
+        }
+    }
+
+    func resetAttachmentFolder() { setAttachmentFolder(nil) }
+
+    private func setAttachmentFolder(_ folder: URL?) {
+        defaults.set(folder?.path, forKey: "attachmentFolder")
+        attachmentFolder = folder ?? AttachmentLibrary.defaultFolder
+        attachmentIssue = nil
+        updateAttachmentLibrary(force: true)
+    }
+
+    func openAttachmentFolder() {
+        do {
+            try FileManager.default.createDirectory(at: attachmentFolder, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            updateAttachmentLibrary(force: true)
+            open(attachmentFolder)
+        } catch { attachmentIssue = error.localizedDescription }
+    }
+
+    func revealAttachment(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+
+    private func updateAttachmentLibrary(force: Bool = false) {
+        let folder = attachmentFolder
+        let copies = Set(snapshot.tasks.flatMap { AttachmentLibrary.copies(for: $0, in: root, to: folder) })
+        guard force || copies != plannedAttachmentCopies else { return }
+        plannedAttachmentCopies = copies
+        attachmentCopyJob?.cancel()
+        guard !copies.isEmpty else { return }
+        attachmentCopyJob = Task.detached(priority: .utility) { [weak self] in
+            var failed: String?
+            for copy in copies {
+                guard !Task.isCancelled else { return }
+                do { try AttachmentLibrary.makeCopy(copy, in: folder) }
+                catch { failed = error.localizedDescription }
+            }
+            guard !Task.isCancelled else { return }
+            await self?.finishAttachmentCopies(to: folder, issue: failed)
+        }
+    }
+
+    private func finishAttachmentCopies(to folder: URL, issue: String?) {
+        guard attachmentFolder == folder else { return }
+        attachmentIssue = issue
     }
 
     func open(_ url: URL) {
@@ -335,8 +436,47 @@ final class AssignmentStore: ObservableObject {
         let visible = rows
         if let selectedID,
            visible.contains(where: { $0.id == selectedID }) ||
-            globalPinnedTasks.contains(where: { $0.id == selectedID }) { return }
+            globalPinnedTasks.contains(where: { $0.id == selectedID }) ||
+            (linkedAssignmentID == selectedID && selectedTask != nil) { return }
         selectedID = pinnedTasks.first?.id ?? visible.first?.id
+    }
+
+    func openWidgetAssignment(_ id: String?) {
+        page = .assignments
+        guard let id, !id.isEmpty else { return }
+        pendingWidgetAssignment = id
+        selectWidgetAssignment()
+    }
+
+    private func selectWidgetAssignment() {
+        guard let id = pendingWidgetAssignment, snapshot.tasks.contains(where: { $0.id == id }) else { return }
+        pendingWidgetAssignment = nil
+        linkedAssignmentID = id
+        selectedID = id
+    }
+
+    func publishWidgets() {
+        guard !loading else { return }
+        let pins = pinnedTasks
+        let data = WidgetSnapshot(theme: DeskTheme.current.rawValue,
+            language: defaults.string(forKey: "interfaceLanguage") ?? "zh-Hans",
+            timetable: snapshot.timetable,
+            pins: pins.prefix(3).map { WidgetAssignment(id: $0.id, title: $0.title,
+                subject: $0.subject, due: Beijing.parse($0.due), pending: $0.pending) },
+            pinCount: pins.count)
+        let path = WidgetSnapshot.file(in: root)
+        guard let encoded = try? data.encoded(), encoded != publishedWidgetData else { return }
+        do {
+            if publishedWidgetData != nil || (try? Data(contentsOf: path)) != encoded {
+                try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                        attributes: [.posixPermissions: 0o700])
+                try encoded.write(to: path, options: .atomic)
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            publishedWidgetData = encoded
+        } catch {
+            // Keep the last readable widget snapshot and retry on the next pulse.
+        }
     }
 
     private func showError(_ text: String, detail: String?) {
@@ -439,6 +579,7 @@ final class AssignmentStore: ObservableObject {
         if requestedAction == "configure" || requestedAction == "verify" {
             settingsIssue = "The sync service stopped. Try verifying again."
         }
+        if requestedAction == "grades" { gradeIssue = "The grade sync service stopped. Try again." }
         requestedAction = nil
         reconnectAt = Date().addingTimeInterval(15)
         stopBackend()
@@ -455,14 +596,14 @@ final class AssignmentStore: ObservableObject {
         switch event.event {
         case "snapshot":
             guard let data = event.data else { return }
-            if data.timetable?.checkedAt != snapshot.timetable?.checkedAt {
-                WidgetCenter.shared.reloadTimelines(ofKind: "TimetableWidget")
-            }
             snapshot = data
             syncIssue = data.syncError
             needsLogin = data.requiresLogin
             loading = false
+            selectWidgetAssignment()
             keepSelection()
+            publishWidgets()
+            updateAttachmentLibrary()
         case "working":
             working = event.operation
         case "finished":
@@ -479,6 +620,8 @@ final class AssignmentStore: ObservableObject {
                     needsLogin = false
                     refreshAfterRequest = true
                 }
+            } else if event.operation == "grades" {
+                gradeIssue = event.error
             } else if let error = event.error {
                 if event.operation != "timetable" {
                     syncIssue = error

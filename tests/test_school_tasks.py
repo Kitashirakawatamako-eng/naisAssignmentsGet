@@ -44,6 +44,74 @@ class FakeClient:
 
 
 class SyncTests(unittest.TestCase):
+    def test_semester_grades_read_published_list_rows_only(self):
+        grade = {"isSynchroToMobiled": True, "scoreType": 1, "score": 0, "totalScore": 50}
+        client = FakeClient([
+            {"id": "a", "name": "Quiz", "subjectName": "Math", "beginTime": "2026-09-12", **grade},
+            {"id": "b", "name": "Hidden", "subjectName": "Math", "beginTime": "2026-10-15",
+             **{**grade, "isSynchroToMobiled": False}},
+            {"id": "c", "name": "Level", "subjectName": "Math", "beginTime": "2026-10-16",
+             "isSynchroToMobiled": True, "scoreType": 2, "levelString": "A"},
+            {"id": "d", "name": "Exam", "subjectName": "Math", "typeName": "Exam",
+             "isSynchroToMobiled": True, "scoreType": 1, "score": None, "content": "Not a grade field"},
+            {"id": "e", "name": "Out of term", "subjectName": "Math", "beginTime": "2026-08-01", **grade},
+        ])
+        snapshot = desktop_bridge.semester_grades(client, NOW)
+        self.assertEqual(snapshot["start_day"], "2026-09-01")
+        self.assertEqual([(r["id"], r.get("score"), r.get("level")) for r in snapshot["records"]],
+                         [("a", "0", None), ("c", None, "A"), ("d", None, None)])
+        self.assertEqual(snapshot["source_published_count"], 3)
+        self.assertEqual(snapshot["records"][-1]["category"], "Exam")
+        self.assertNotIn("content", snapshot["records"][-1])
+        self.assertEqual(client.detail_requests, [])
+
+    def test_failed_grade_sync_preserves_prior_results_and_records_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior = desktop_bridge.semester_grades(FakeClient(), NOW)
+            app.save_json(root / desktop_bridge.GRADE_FILE, prior)
+            with (patch.object(app, "ROOT", root), patch.object(app, "AttachmentWorker"),
+                  patch.object(desktop_bridge, "emit"), patch.object(app, "check_with_login",
+                          side_effect=app.TemporarySyncError("HTTPS unavailable"))):
+                desktop_bridge.DesktopBackend().handle({"action": "grades"})
+            self.assertEqual(app.load_json(root / desktop_bridge.GRADE_FILE, None), prior)
+            result = desktop_bridge.grade_snapshot(root, {}, {})
+            self.assertEqual(result["sync_issue"], "HTTPS unavailable")
+            self.assertTrue(result["last_attempt_at"])
+            self.assertFalse((root / "data/state.json").exists())
+            self.assertFalse((root / "data/tasks").exists())
+
+    def test_grade_sync_in_new_term_is_visible_before_task_sync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = FakeClient([{"id": "current", "name": "Quiz", "subjectName": "Math",
+                "beginTime": "2026-10-01", "isSynchroToMobiled": True, "scoreType": 1, "score": 30, "totalScore": 40}])
+            app.save_json(root / desktop_bridge.GRADE_FILE, desktop_bridge.semester_grades(client, NOW))
+            state = {"semester_id": "s0", "last_success": (NOW - timedelta(days=1)).isoformat(),
+                     "tasks": {"old": {"task": {"subject":"Math", "title":"Legacy", "grade":{"score":"14", "total":"20"}}}}}
+            book = desktop_bridge.grade_snapshot(root, state, {})
+            self.assertEqual(book["semester_id"], "s1")
+            self.assertEqual([r["id"] for r in book["records"]], ["current"])
+
+    def test_grade_book_merges_newer_local_changes_with_imported_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            grade = {"id": "a", "course": "Math", "title": "Quiz", "day": "2026-10-01",
+                     "category": "", "exempt": False, "score": "48", "total": "50"}
+            book = {"semester_id": "s1", "start_day": "2026-09-01", "end_day": "2027-01-31",
+                    "checked_at": NOW.isoformat(), "records": [grade]}
+            app.save_json(root / desktop_bridge.GRADE_FILE, book)
+            task = {"subject": "Math", "title": "Quiz", "published": "2026-10-01",
+                    "grade": {"score": "50", "total": "50"}}
+            state = {"semester_id": "s1", "tasks": {"a": {
+                "task": task, "last_seen": (NOW - timedelta(days=1)).isoformat()}}}
+            current = lambda: desktop_bridge.grade_snapshot(root, state, {})["records"]
+            self.assertEqual([r["score"] for r in current()], ["48"])
+            state["tasks"]["a"]["last_seen"] = (NOW + timedelta(minutes=1)).isoformat()
+            self.assertEqual([r["score"] for r in current()], ["50"])
+            task["grade"] = None
+            self.assertEqual(current(), [])
+
     def test_new_install_saves_browser_session_only_after_successful_verification(self):
         cookies = [
             {"name": "SessionId", "value": "test-session", "domain": "naisstu.schoolis.cn"},

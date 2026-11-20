@@ -35,7 +35,7 @@ struct AssignmentWindow: View {
                     .background(panel)
             } detail: {
                 Group {
-                    if let task = (store.pinnedTasks + rows).first(where: { $0.id == store.selectedID }) {
+                    if let task = store.selectedTask {
                         TaskDetail(task: task, store: store).id(task.id)
                     } else {
                         Placeholder(icon: "doc.text.magnifyingglass", title: "Assignment Details", subtitle: "Select an assignment to view its details.")
@@ -341,9 +341,14 @@ private struct TaskDetail: View {
                 }
                 if !task.attachments.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Attachments and Links").font(.headline)
+                        HStack {
+                            Text("Attachments and Links").font(.headline)
+                            Spacer()
+                            Button("Open Attachment Folder") { store.openAttachmentFolder() }
+                                .buttonStyle(.link)
+                        }
                         ForEach(Array(task.attachments.enumerated()), id: \.offset) { _, attachment in
-                            AttachmentRow(attachment: attachment, store: store)
+                            AttachmentRow(attachment: attachment, task: task, store: store)
                         }
                     }
                 }
@@ -387,10 +392,11 @@ private struct TaskDetail: View {
 
 private struct AttachmentRow: View {
     let attachment: Attachment
+    let task: Assignment
     @ObservedObject var store: AssignmentStore
 
     var body: some View {
-        let local = store.localURL(for: attachment)
+        let local = store.localURL(for: attachment, in: task)
         let link = attachment.originalURL
         HStack(spacing: 9) {
             Image(systemName: local != nil ? "doc" : "link").foregroundStyle(jade)
@@ -402,12 +408,15 @@ private struct AttachmentRow: View {
             }
             Spacer(minLength: 4)
             if let local { Button("Open File") { store.open(local) } }
-            if let link {
+            if local != nil || link != nil {
                 Menu {
-                    Button("Open Link") { store.open(link) }
-                    Button("Copy Link") { store.copy(link) }
+                    if let local { Button("Show in Finder") { store.revealAttachment(local) } }
+                    if let link {
+                        Button("Open Link") { store.open(link) }
+                        Button("Copy Link") { store.copy(link) }
+                    }
                 } label: {
-                    Text("Link")
+                    Text("More")
                 }
                 .fixedSize()
             }
@@ -494,6 +503,23 @@ struct AssignmentSettings: View {
                     .disabled(store.working == "configure")
             }
             AppearanceSettings()
+            Divider()
+            VStack(alignment: .leading, spacing: 7) {
+                Label("Attachment Folder", systemImage: "folder").font(.headline)
+                Text(store.attachmentFolder.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    .lineLimit(2).help(store.attachmentFolder.path)
+                HStack {
+                    Button("Choose Folder…") { store.chooseAttachmentFolder() }
+                    Button("Open Folder") { store.openAttachmentFolder() }
+                    Spacer()
+                    Button("Use Default") { store.resetAttachmentFolder() }
+                        .disabled(store.attachmentFolder == AttachmentLibrary.defaultFolder)
+                }
+                if let issue = store.attachmentIssue {
+                    Text("Could not copy files to the selected folder. \(issue)")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
             Divider()
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Automatic Sync", isOn: $store.automatic).toggleStyle(.switch)

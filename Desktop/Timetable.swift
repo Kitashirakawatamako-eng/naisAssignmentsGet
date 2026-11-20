@@ -1,6 +1,6 @@
 import Foundation
 
-struct SchoolLesson: Decodable, Identifiable {
+struct SchoolLesson: Codable, Identifiable {
     let id, title: String
     let startAt, endAt: Date
     let room, teacher: String?
@@ -34,7 +34,7 @@ struct SchoolLesson: Decodable, Identifiable {
     func contains(_ time: Date) -> Bool { startAt <= time && time < endAt }
 }
 
-struct Timetable: Decodable {
+struct Timetable: Codable {
     let checkedAt: Date
     let startDay, endDay: String
     let courses: [SchoolLesson]
@@ -63,7 +63,7 @@ struct Timetable: Decodable {
 }
 
 enum DeskPage: String, CaseIterable, Identifiable {
-    case assignments = "Assignments", timetable = "Timetable"
+    case assignments = "Assignments", timetable = "Timetable", grades = "Grades"
     var id: Self { self }
 }
 

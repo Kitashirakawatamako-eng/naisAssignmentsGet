@@ -8,3 +8,12 @@
 "Open the app to sync your timetable." = "打开作业速览同步课表。";
 "Advanced Mathematics" = "进阶数学";
 "Physics" = "物理";
+"Pinned Assignments" = "置顶作业";
+"No Pinned Assignments" = "暂无置顶作业";
+"Pin an assignment in the app to see it here." = "在作业速览置顶后即可显示。";
+"Keep your pinned assignments and deadlines on the desktop." = "查看置顶作业和截止时间。";
+"See when and where your next class starts." = "查看下节课时间和教室。";
+"Open the timetable to see the full schedule." = "打开应用查看完整课表。";
+"+%lld more" = "另有 %lld 项";
+"Overdue" = "逾期";
+"Completed" = "已处理";

@@ -51,6 +51,7 @@ struct HomeworkApp: App {
                 switch store.page {
                 case .assignments: AssignmentWindow(store: store)
                 case .timetable: TimetableWindow(store: store)
+                case .grades: GPAWindow(store: store)
                 }
             }
             .modifier(AppearanceSurface())
@@ -61,11 +62,17 @@ struct HomeworkApp: App {
             .environment(\.locale, Locale(identifier: interfaceLanguage))
             .onAppear(perform: connect)
             .onOpenURL { url in
-                if url.scheme == "spassignments", url.host == "timetable" {
+                guard url.scheme == "spassignments" else { return }
+                if url.host == "timetable" {
                     store.page = .timetable
-                    openWindow(id: "assignments")
-                    NSApp.activate(ignoringOtherApps: true)
+                } else if url.host == "assignments" {
+                    let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value
+                    store.openWidgetAssignment(id)
+                } else {
+                    return
                 }
+                openWindow(id: "assignments")
+                NSApp.activate(ignoringOtherApps: true)
             }
         }
         .defaultSize(width: 1120, height: 710)
@@ -78,6 +85,7 @@ struct HomeworkApp: App {
             CommandMenu("Overview") {
                 Button("Assignments") { store.page = .assignments }.keyboardShortcut("1")
                 Button("Timetable") { store.page = .timetable }.keyboardShortcut("2")
+                Button("Grades") { store.page = .grades }.keyboardShortcut("3")
                 Toggle("Floating Timetable", isOn: $store.floatingTimetable)
             }
         }
