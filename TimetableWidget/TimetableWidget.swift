@@ -2,162 +2,311 @@ import Darwin
 import SwiftUI
 import WidgetKit
 
-private struct TimetableEntry: TimelineEntry {
+private struct WidgetEntry: TimelineEntry {
     let date: Date
-    let timetable: Timetable?
+    let data: WidgetSnapshot?
 
+    var timetable: Timetable? { data?.timetable }
     var hasSchedule: Bool { timetable?.covers(date) == true }
-    var current: SchoolLesson? { timetable?.current(at: date) }
-    var next: SchoolLesson? { timetable?.next(after: date) }
+    var theme: DeskTheme { DeskTheme(rawValue: data?.theme ?? "") ?? .otter }
+    var language: String { data?.language ?? (Locale.preferredLanguages.first?.hasPrefix("zh") == true ? "zh-Hans" : "en") }
+    var chinese: Bool { language == "zh-Hans" }
 
     static let preview: Self = {
-        let date = Beijing.parse("2026-11-19T09:18:00+08:00")!
+        let date = Beijing.parse("2026-11-20T09:18:00+08:00")!
         let courses = [
-            SchoolLesson(id: "math", title: "Advanced Mathematics",
-                         startAt: Beijing.parse("2026-11-19T09:00:00+08:00")!,
-                         endAt: Beijing.parse("2026-11-19T09:45:00+08:00")!,
+            SchoolLesson(id: "math", title: "Mathematics",
+                         startAt: Beijing.parse("2026-11-20T09:00:00+08:00")!,
+                         endAt: Beijing.parse("2026-11-20T09:45:00+08:00")!,
                          room: "301", teacher: nil, temporary: false),
             SchoolLesson(id: "physics", title: "Physics",
-                         startAt: Beijing.parse("2026-11-19T10:00:00+08:00")!,
-                         endAt: Beijing.parse("2026-11-19T10:45:00+08:00")!,
+                         startAt: Beijing.parse("2026-11-20T10:00:00+08:00")!,
+                         endAt: Beijing.parse("2026-11-20T10:45:00+08:00")!,
                          room: "202", teacher: nil, temporary: false)
         ]
         let day = Beijing.day(date)
-        return Self(date: date, timetable: Timetable(checkedAt: date, startDay: day, endDay: day, courses: courses))
+        let timetable = Timetable(checkedAt: date, startDay: day, endDay: day, courses: courses)
+        let pins = [
+            WidgetAssignment(id: "sample1", title: "Physics problem set", subject: "Physics",
+                             due: Beijing.parse("2026-11-20T18:00:00+08:00"), pending: true),
+            WidgetAssignment(id: "sample2", title: "Literature draft", subject: "Literature",
+                             due: Beijing.parse("2026-11-21T09:30:00+08:00"), pending: true)
+        ]
+        return Self(date: date, data: WidgetSnapshot(theme: "otter", language: "en",
+                                                     timetable: timetable, pins: pins, pinCount: pins.count))
     }()
 }
 
-private struct TimetableProvider: TimelineProvider {
-    func placeholder(in context: Context) -> TimetableEntry { .preview }
+private struct WidgetProvider: TimelineProvider {
+    var showSchedule = true
 
-    func getSnapshot(in context: Context, completion: @escaping (TimetableEntry) -> Void) {
-        completion(context.isPreview ? .preview : TimetableEntry(date: Date(), timetable: readTimetable()))
+    func placeholder(in context: Context) -> WidgetEntry { .preview }
+
+    func getSnapshot(in context: Context, completion: @escaping (WidgetEntry) -> Void) {
+        let data = readData()
+        completion(context.isPreview && data == nil ? .preview : WidgetEntry(date: Date(), data: data))
     }
 
-    func getTimeline(in context: Context, completion: @escaping (Timeline<TimetableEntry>) -> Void) {
+    func getTimeline(in context: Context, completion: @escaping (Timeline<WidgetEntry>) -> Void) {
         let now = Date()
-        let timetable = readTimetable()
-        guard let timetable, timetable.covers(now) else {
-            completion(Timeline(entries: [TimetableEntry(date: now, timetable: nil)],
-                                policy: .after(now.addingTimeInterval(15 * 60))))
+        let data = readData()
+        let entry = WidgetEntry(date: now, data: data)
+        guard data != nil, !showSchedule || entry.hasSchedule else {
+            completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(15 * 60))))
             return
         }
         let horizon = now.addingTimeInterval(24 * 60 * 60)
         var dates = Set([now])
-        for course in timetable.courses {
-            for boundary in [course.startAt, course.endAt] where boundary > now && boundary < horizon {
-                dates.insert(boundary)
+        if showSchedule {
+            for course in data?.timetable?.courses ?? [] {
+                for boundary in [course.startAt, course.endAt] where boundary > now && boundary < horizon {
+                    dates.insert(boundary)
+                }
+            }
+        } else {
+            for pin in data?.pins ?? [] where pin.pending {
+                if let due = pin.due, due > now, due < horizon { dates.insert(due) }
             }
         }
         if let midnight = Beijing.calendar.dateInterval(of: .day, for: now)?.end {
             dates.insert(midnight)
         }
-        let entries = dates.sorted().map { TimetableEntry(date: $0, timetable: timetable) }
+        let entries = dates.sorted().map { WidgetEntry(date: $0, data: data) }
         completion(Timeline(entries: entries, policy: .after(horizon)))
     }
 
-    private func readTimetable() -> Timetable? {
+    private func readData() -> WidgetSnapshot? {
         guard let home = getpwuid(getuid())?.pointee.pw_dir else { return nil }
-        let url = URL(fileURLWithPath: String(cString: home), isDirectory: true)
-            .appendingPathComponent("Library/Application Support/作业速览/data/timetable.json")
+        let root = URL(fileURLWithPath: String(cString: home), isDirectory: true)
+            .appendingPathComponent("Library/Application Support/作业速览")
+        if let data = try? Data(contentsOf: WidgetSnapshot.file(in: root)),
+           let snapshot = try? WidgetSnapshot.decode(from: data) {
+            return snapshot
+        }
+        // Keep the existing timetable usable until the updated app creates the widget snapshot.
+        let cache = root.appendingPathComponent("data/timetable.json")
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? decoder.decode(Timetable.self, from: data)
+        guard let data = try? Data(contentsOf: cache), let timetable = try? decoder.decode(Timetable.self, from: data) else { return nil }
+        let language = Locale.preferredLanguages.first?.hasPrefix("zh") == true ? "zh-Hans" : "en"
+        return WidgetSnapshot(theme: "classic", language: language, timetable: timetable, pins: [], pinCount: 0)
     }
 }
 
-private struct TimetableWidgetView: View {
-    let entry: TimetableEntry
+private enum WidgetPage {
+    case timetable, nextClass, pins
+}
+
+private struct AssignmentWidgetView: View {
+    let entry: WidgetEntry
+    let page: WidgetPage
     @Environment(\.widgetFamily) private var family
     @Environment(\.widgetRenderingMode) private var renderingMode
 
     private var compact: Bool { family == .systemSmall }
     private var fullColor: Bool { renderingMode == .fullColor }
-    private var ink: Color { fullColor ? Color(red: 0.96, green: 0.99, blue: 0.97) : .primary }
-    private var muted: Color { fullColor ? Color(red: 0.69, green: 0.78, blue: 0.76) : .secondary }
-    private var jade: Color { fullColor ? Color(red: 0.56, green: 0.91, blue: 0.77) : .primary }
+    private var ink: Color {
+        fullColor && entry.theme != .classic ? Color(red: 0.10, green: 0.19, blue: 0.20) : .primary
+    }
+    private var muted: Color {
+        fullColor && entry.theme != .classic ? Color(red: 0.30, green: 0.38, blue: 0.40) : .secondary
+    }
+    private var accent: Color { fullColor ? entry.theme.primary : .primary }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 8 : 12) {
+        VStack(alignment: .leading, spacing: compact ? 6 : 9) {
             HStack {
-                Text("Timetable").font(.system(size: compact ? 13 : 15, weight: .semibold))
-                Spacer(minLength: 4)
-                Text(Beijing.shortDay(entry.date))
-                    .font(.system(size: 10, weight: .medium)).foregroundStyle(muted)
-            }
-            if entry.hasSchedule {
-                let layout = compact ? AnyLayout(VStackLayout(spacing: 6)) : AnyLayout(HStackLayout(spacing: 9))
-                layout {
-                    lesson("In Class", entry.current, next: false)
-                    lesson("Next Class", entry.next, next: true)
+                Text(title).font(.system(size: compact ? 12 : 14, weight: .semibold))
+                    .foregroundStyle(accent).widgetAccentable()
+                Spacer(minLength: 3)
+                if page == .timetable {
+                    Text(Beijing.shortDay(entry.date, chinese: entry.chinese))
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(muted)
                 }
-            } else {
-                Spacer(minLength: 2)
-                Text("Timetable Unavailable").font(.system(size: 14, weight: .semibold))
-                Text("Open the app to sync your timetable.")
-                    .font(.system(size: 11)).foregroundStyle(muted)
-                Spacer(minLength: 2)
+            }
+            .lineLimit(1)
+
+            switch page {
+            case .timetable: timetable
+            case .nextClass: nextClass
+            case .pins: pins
             }
         }
         .foregroundStyle(ink)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(compact ? 11 : 14)
-        .widgetURL(URL(string: "spassignments://timetable"))
-        .containerBackground(for: .widget) {
-            LinearGradient(colors: [Color(red: 0.075, green: 0.21, blue: 0.20),
-                                    Color(red: 0.05, green: 0.14, blue: 0.14)],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
+        .padding(compact ? 12 : 14)
+        .widgetURL(openURL)
+        .containerBackground(for: .widget) { entry.theme.surface }
+        .environment(\.locale, Locale(identifier: entry.language))
+        .environment(\.colorScheme, entry.theme == .classic ? colorScheme : .light)
+    }
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var title: LocalizedStringKey {
+        switch page {
+        case .timetable: "Timetable"
+        case .nextClass: "Next Class"
+        case .pins: "Pinned Assignments"
         }
+    }
+
+    private var openURL: URL {
+        guard page == .pins else { return WidgetSnapshot.timetableURL }
+        return compact ? (entry.data?.pins.first?.url ?? WidgetSnapshot.assignmentURL) : WidgetSnapshot.assignmentURL
+    }
+
+    @ViewBuilder private var timetable: some View {
+        if entry.hasSchedule {
+            let layout = compact ? AnyLayout(VStackLayout(spacing: 5)) : AnyLayout(HStackLayout(spacing: 8))
+            layout {
+                lesson("In Class", entry.timetable?.current(at: entry.date), next: false)
+                lesson("Next Class", entry.timetable?.next(after: entry.date), next: true)
+            }
+        } else {
+            empty("Timetable Unavailable", hint: "Open the app to sync your timetable.")
+        }
+    }
+
+    @ViewBuilder private var nextClass: some View {
+        if !entry.hasSchedule {
+            empty("Timetable Unavailable", hint: "Open the app to sync your timetable.")
+        } else if let course = entry.timetable?.next(after: entry.date) {
+            let sameDay = Beijing.calendar.isDate(course.startAt, inSameDayAs: entry.date)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Beijing.clock(course.startAt)).font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .monospacedDigit().foregroundStyle(accent).widgetAccentable()
+                Text(course.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                if !sameDay {
+                    Text(Beijing.shortDay(course.startAt, chinese: entry.chinese)).foregroundStyle(muted)
+                }
+                let end = Beijing.clock(course.endAt)
+                Text(course.room.map { "\($0) · \(end)" } ?? end)
+                    .monospacedDigit().foregroundStyle(muted).lineLimit(1)
+            }
+            .font(.system(size: 10, weight: .medium))
+            .padding(.top, 4)
+            .accessibilityElement(children: .combine)
+        } else {
+            empty("No Upcoming Class", hint: "Open the timetable to see the full schedule.")
+        }
+    }
+
+    @ViewBuilder private var pins: some View {
+        let pins = entry.data?.pins ?? []
+        if pins.isEmpty {
+            empty("No Pinned Assignments", hint: "Pin an assignment in the app to see it here.")
+        } else {
+            ForEach(pins.prefix(compact ? 2 : 3)) { item in
+                if compact {
+                    assignment(item)
+                } else {
+                    Link(destination: item.url) { assignment(item) }
+                        .buttonStyle(.plain)
+                }
+            }
+            let remaining = (entry.data?.pinCount ?? 0) - (compact ? 2 : 3)
+            if remaining > 0 {
+                Text("+\(remaining) more").font(.system(size: 10, weight: .medium)).foregroundStyle(muted)
+            }
+        }
+    }
+
+    private func assignment(_ item: WidgetAssignment) -> some View {
+        let overdue = item.pending && item.due.map { $0 <= entry.date } == true
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(item.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+            HStack(spacing: 5) {
+                if !compact { Text(item.subject) }
+                if let due = item.due {
+                    Text(Beijing.dueLabel(due, relativeTo: entry.date, chinese: entry.chinese)).monospacedDigit()
+                }
+                if overdue { Text("Overdue").foregroundStyle(fullColor ? Color(red: 0.69, green: 0.25, blue: 0.14) : .primary) }
+                if !item.pending { Text("Completed") }
+            }
+            .foregroundStyle(muted).font(.system(size: 9, weight: .medium)).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(fullColor ? entry.theme.background : .primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+        .accessibilityElement(children: .combine)
     }
 
     private func lesson(_ caption: LocalizedStringKey, _ course: SchoolLesson?, next: Bool) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 2 : 5) {
-            HStack(spacing: 3) {
-                Text(caption).fontWeight(.semibold).foregroundStyle(next ? muted : jade)
-                Spacer(minLength: 0)
-                if let course {
-                    Text(compact ? course.compactStart(relativeTo: entry.date) : course.timeRange)
-                        .monospacedDigit().foregroundStyle(muted)
-                }
-            }
-            .lineLimit(1)
-            .font(.system(size: 10))
+        VStack(alignment: .leading, spacing: 4) {
+            Text(caption).font(.system(size: 10, weight: .semibold)).foregroundStyle(next ? muted : accent)
             if let course {
-                Text(course.title).font(.system(size: compact ? 13 : 16, weight: .semibold)).lineLimit(1)
+                Text(course.title).font(.system(size: compact ? 12 : 15, weight: .semibold)).lineLimit(1)
+                let sameDay = Beijing.calendar.isDate(course.startAt, inSameDayAs: entry.date)
+                let start = sameDay ? "" : Beijing.shortDay(course.startAt, chinese: entry.chinese) + " "
+                Text(start + (compact ? Beijing.clock(course.startAt) : course.timeRange))
+                    .monospacedDigit().font(.system(size: 9, weight: .medium)).foregroundStyle(muted).lineLimit(1)
+                if !compact, let room = course.room {
+                    Text(room).font(.system(size: 10)).foregroundStyle(muted).lineLimit(1)
+                }
             } else {
                 Text(next ? "No Upcoming Class" : "No Class Now")
-                    .font(.system(size: compact ? 13 : 16, weight: .semibold)).lineLimit(1)
-            }
-            if !compact, let course {
-                let today = Beijing.calendar.isDate(course.startAt, inSameDayAs: entry.date)
-                let location = [today ? nil : Beijing.shortDay(course.startAt), course.room].compactMap { $0 }
-                if !location.isEmpty {
-                    Text(location.joined(separator: " · "))
-                        .font(.system(size: 10)).foregroundStyle(muted).lineLimit(1)
-                }
+                    .font(.system(size: compact ? 12 : 14, weight: .semibold)).lineLimit(1)
             }
         }
-        .padding(.horizontal, compact ? 8 : 11)
-        .padding(.vertical, compact ? 5 : 11)
         .frame(maxWidth: .infinity, maxHeight: compact ? nil : .infinity, alignment: .topLeading)
-        .background(fullColor
-            ? Color(red: 0.52, green: 0.91, blue: 0.81).opacity(next ? 0.08 : 0.15)
-            : Color.primary.opacity(next ? 0.06 : 0.11), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 8).padding(.vertical, compact ? 5 : 10)
+        .background(fullColor ? entry.theme.background : .primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
         .accessibilityElement(children: .combine)
+    }
+
+    private func empty(_ title: LocalizedStringKey, hint: LocalizedStringKey) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Spacer(minLength: 2)
+            Text(title).font(.system(size: 13, weight: .semibold))
+            Text(hint).font(.system(size: 10)).foregroundStyle(muted)
+            Spacer(minLength: 2)
+        }
     }
 }
 
-@main
 struct DesktopTimetableWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "TimetableWidget", provider: TimetableProvider()) { entry in
-            TimetableWidgetView(entry: entry)
+        StaticConfiguration(kind: "TimetableWidget", provider: WidgetProvider()) {
+            AssignmentWidgetView(entry: $0, page: .timetable)
         }
         .configurationDisplayName("Timetable")
         .description("See your current and next class.")
         .supportedFamilies([.systemSmall, .systemMedium])
         .contentMarginsDisabled()
+    }
+}
+
+struct NextClassWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "NextClassWidget", provider: WidgetProvider()) {
+            AssignmentWidgetView(entry: $0, page: .nextClass)
+        }
+        .configurationDisplayName("Next Class")
+        .description("See when and where your next class starts.")
+        .supportedFamilies([.systemSmall])
+        .contentMarginsDisabled()
+    }
+}
+
+struct PinnedAssignmentsWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "PinnedAssignmentsWidget", provider: WidgetProvider(showSchedule: false)) {
+            AssignmentWidgetView(entry: $0, page: .pins)
+        }
+        .configurationDisplayName("Pinned Assignments")
+        .description("Keep your pinned assignments and deadlines on the desktop.")
+        .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
+    }
+}
+
+@main
+struct AssignmentWidgets: WidgetBundle {
+    var body: some Widget {
+        DesktopTimetableWidget()
+        NextClassWidget()
+        PinnedAssignmentsWidget()
     }
 }

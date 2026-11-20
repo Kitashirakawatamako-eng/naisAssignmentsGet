@@ -111,6 +111,8 @@ def connection_error(error):
     if isinstance(cause, ssl.SSLCertVerificationError):
         return SyncError("学校网站的证书验证失败。")
     if isinstance(cause, ssl.SSLError):
+        if getattr(cause, "reason", None) in ("WRONG_VERSION_NUMBER", "TLSV1_ALERT_PROTOCOL_VERSION", "UNSUPPORTED_PROTOCOL"):
+            return TemporarySyncError("学校网站的 HTTPS 握手失败。请在能正常打开学校网站的网络上重试。")
         return TemporarySyncError("学校网站的安全连接暂时失败。")
     if isinstance(cause, (http.client.IncompleteRead, http.client.RemoteDisconnected)):
         return TemporarySyncError("学校接口响应中断。")
@@ -467,12 +469,19 @@ def collect_list(client, since, semester=None):
     end = str(semester["endDate"])[:10]
     if begin > end:
         return semester, []
+    rows = collect_term_rows(client, semester, begin, end)
+    # The list supplies beginTime. The task detail has publishTime, checked before saving.
+    return semester, [row for row in rows
+                      if (started := due_date(row.get("beginTime"))) and started >= since]
+
+
+def collect_term_rows(client, semester, begin, end):
     rows, seen, total = [], set(), None
     for page in range(1, 1001):
         data = client.get("/api/LearningTask/GetList", semesterId=semester["id"],
                           beginTime=begin, endTime=end,
                           pageIndex=page, pageSize=PAGE_SIZE, key="")
-        if not isinstance(data, dict) or not isinstance(data.get("totalCount"), int):
+        if not isinstance(data, dict) or type(data.get("totalCount")) is not int or data["totalCount"] < 0:
             raise SyncError("任务分页格式发生变化，未更新同步记录。")
         items = data.get("list")
         if items is None and data["totalCount"] == 0:
@@ -484,15 +493,15 @@ def collect_list(client, since, semester=None):
         if data["totalCount"] != total:
             raise TemporarySyncError("学校作业列表正在更新。")
         for row in items:
+            if not isinstance(row, dict):
+                raise SyncError("学校接口返回了无法识别的记录。")
             ident = str(row.get("id") or "")
             if not ident or ident in seen:
                 raise TemporarySyncError("学校接口返回的作业列表有缺项或重复。")
             seen.add(ident)
             rows.append(row)
         if len(rows) == total:
-            # The list supplies beginTime. The detail has publishTime, checked before saving.
-            return semester, [row for row in rows
-                              if (started := due_date(row.get("beginTime"))) and started >= since]
+            return rows
         if not items or len(rows) > total:
             break
     raise TemporarySyncError("学校接口返回的作业列表不完整。")
@@ -720,10 +729,12 @@ def sync(client, root=ROOT, now=None, *, semester=None, refresh_details=False, d
             result = dict(task, attachments=downloads, detail_pending=bool(detail_error))
             if not old or old["fingerprint"] != digest:
                 changes.append(dict(result, change="新增" if not old else "更新"))
-            state["tasks"][ident] = {"fingerprint": digest, "first_seen": old["first_seen"] if old else now.isoformat(), "task": task}
+            state["tasks"][ident] = {"fingerprint": digest, "first_seen": old["first_seen"] if old else now.isoformat(),
+                                      "last_seen": now.isoformat(), "task": task}
             tasks.append(result)
         report_path = publish_report(root, tasks, changes, state, now, initial, warnings, write_html=write_html)
-        state.update(last_success=now.isoformat(), semester_id=semester["id"])
+        state.update(last_success=now.isoformat(), semester_id=semester["id"],
+                     semester_start=str(semester["startDate"])[:10], semester_end=str(semester["endDate"])[:10])
         save_json(state_file, state)
         save_json(root / "data/status.json", {"ok": True, "checked_at": now.isoformat(), "changes": len(changes), "warnings": len(warnings)})
         items = [item for task in tasks for item in task["attachments"]]

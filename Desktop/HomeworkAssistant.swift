@@ -354,7 +354,7 @@ struct HomeworkAIPanel: View {
                 Text("Files to send").font(.headline)
                 ForEach(task.attachments.indices, id: \.self) { index in
                     let attachment = task.attachments[index]
-                    if let url = store.localURL(for: attachment) {
+                    if let url = store.localURL(for: attachment, in: task) {
                         Toggle(attachment.name, isOn: Binding(get: { files.contains(url) }, set: { value in if value { files.append(url) } else { files.removeAll { $0 == url } } })).disabled(assistant.busy)
                     } else { Text(attachment.name + " — not downloaded; add a local copy if needed.").font(.caption).foregroundStyle(.secondary) }
                 }

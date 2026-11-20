@@ -1,59 +1,6 @@
 import AppKit
 import SwiftUI
 
-enum DeskTheme: String, CaseIterable, Identifiable {
-    case otter, paleo, ocean, classic
-    var id: String { rawValue }
-    static var current: DeskTheme { DeskTheme(rawValue: UserDefaults.standard.string(forKey: "appearanceTheme") ?? "otter") ?? .otter }
-    var title: LocalizedStringKey {
-        switch self { case .otter: "Little Otter"; case .paleo: "Fossil Cove"; case .ocean: "Ocean White"; case .classic: "Classic Jade" }
-    }
-    var subtitle: LocalizedStringKey {
-        switch self {
-        case .otter: "Cream, clear water, and a little otter"
-        case .paleo: "Fossil ivory, moss green, and stone"
-        case .ocean: "White with green and blue accents"
-        case .classic: "Original theme · follows system appearance"
-        }
-    }
-    var icon: String { self == .otter ? "otter" : self == .classic ? "classic" : "creature" }
-    var primary: Color {
-        switch self {
-        case .otter: Color(red: 0.04, green: 0.53, blue: 0.55)
-        case .paleo: Color(red: 0.28, green: 0.43, blue: 0.30)
-        case .ocean: Color(red: 0.04, green: 0.60, blue: 0.38)
-        case .classic: Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                ? NSColor(srgbRed: 0.47, green: 0.80, blue: 0.70, alpha: 1)
-                : NSColor(srgbRed: 0.13, green: 0.35, blue: 0.29, alpha: 1)
-        })
-        }
-    }
-    var accent: Color {
-        switch self {
-        case .otter: Color(red: 0.12, green: 0.57, blue: 0.78)
-        case .paleo: Color(red: 0.61, green: 0.46, blue: 0.27)
-        case .ocean: Color(red: 0.02, green: 0.51, blue: 0.88)
-        case .classic: primary
-        }
-    }
-    var surface: Color {
-        switch self {
-        case .otter: Color(red: 1, green: 0.99, blue: 0.96)
-        case .paleo: Color(red: 0.99, green: 0.98, blue: 0.94)
-        case .ocean: .white
-        case .classic: Color(nsColor: .controlBackgroundColor)
-        }
-    }
-    var background: Color {
-        switch self {
-        case .otter: Color(red: 0.92, green: 0.98, blue: 0.98)
-        case .paleo: Color(red: 0.94, green: 0.93, blue: 0.87)
-        case .ocean: Color(red: 0.97, green: 0.99, blue: 1)
-        case .classic: Color(nsColor: .windowBackgroundColor)
-        }
-    }
-}
 var oceanTheme: Bool { DeskTheme.current != .classic }
 var jade: Color { DeskTheme.current.primary }
 var oceanBlue: Color { DeskTheme.current.accent }
@@ -64,7 +11,7 @@ var headerDecoration: Color { DeskTheme.current == .classic ? .clear : panel }
 struct AppearanceSurface: ViewModifier {
     @AppStorage("appearanceTheme") private var theme = "otter"
     func body(content: Content) -> some View {
-        content.id(theme).preferredColorScheme(theme == "classic" ? nil : .light).tint(jade)
+        content.preferredColorScheme(theme == "classic" ? nil : .light).tint(jade)
     }
 }
 
@@ -84,11 +31,55 @@ struct ThemeMascot: View {
 }
 
 @MainActor enum AppIconChoice {
-    static func image(_ choice: String, background: Bool? = nil) -> NSImage? {
-        let useBackground = background ?? (UserDefaults.standard.object(forKey: "iconBackgroundEnabled") as? Bool ?? true)
-        let name = choice == "classic" ? "ClassicIcon" : choice == "otter" ? (useBackground ? "OtterIcon" : "OtterTransparentIcon") : (useBackground ? "CreatureIcon" : "CreatureTransparentIcon")
-        guard let url = Bundle.main.url(forResource: name, withExtension: "icns") else { return nil }
-        return NSImage(contentsOf: url)
+    private static var images: [String: NSImage] = [:]
+
+    static func image(_ choice: String, background: Bool? = nil, bundle: Bundle = .main) -> NSImage? {
+        let tile = background ?? (UserDefaults.standard.object(forKey: "iconBackgroundEnabled") as? Bool ?? true)
+        let cacheKey = "\(bundle.bundlePath):\(choice):\(tile)"
+        if let cached = images[cacheKey] { return cached }
+
+        let result: NSImage?
+        switch choice {
+        case "classic":
+            result = load("ClassicIcon", extension: "icns", in: bundle)
+        case "otter", "creature":
+            let otter = choice == "otter"
+            let base = otter ? "Otter" : "Creature"
+            guard let mascot = load(base + "TransparentIconSource", extension: "png", in: bundle)
+                ?? load(base + "TransparentIcon", extension: "icns", in: bundle) else { return nil }
+            let scene = tile ? load(otter ? "OtterBackground" : "PaleoBackground", extension: "png", in: bundle) : nil
+            result = tile ? withBackground(mascot, scene: scene, theme: otter ? .otter : .paleo) : mascot
+        default:
+            return image("otter", background: tile, bundle: bundle)
+        }
+        images[cacheKey] = result
+        return result
+    }
+
+    private static func load(_ name: String, extension ext: String, in bundle: Bundle) -> NSImage? {
+        bundle.url(forResource: name, withExtension: ext).flatMap(NSImage.init(contentsOf:))
+    }
+
+    private static func withBackground(_ mascot: NSImage, scene: NSImage?, theme: DeskTheme) -> NSImage {
+        let size = NSSize(width: 512, height: 512)
+        return NSImage(size: size, flipped: false) { canvas in
+            let tile = canvas.insetBy(dx: 42, dy: 42)
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: tile, xRadius: 97, yRadius: 97).addClip()
+            (theme == .otter ? NSColor(srgbRed: 0.64, green: 0.88, blue: 0.91, alpha: 1)
+                : NSColor(srgbRed: 0.95, green: 0.89, blue: 0.74, alpha: 1)).setFill()
+            tile.fill()
+            if let scene {
+                let square = min(scene.size.width, scene.size.height)
+                let source = NSRect(x: (scene.size.width - square) / 2, y: (scene.size.height - square) / 2,
+                                    width: square, height: square)
+                scene.draw(in: tile, from: source, operation: .sourceOver, fraction: 1)
+            }
+            NSGraphicsContext.current?.imageInterpolation = .none
+            mascot.draw(in: tile.insetBy(dx: 14, dy: 14), from: .zero, operation: .sourceOver, fraction: 1)
+            NSGraphicsContext.restoreGraphicsState()
+            return true
+        }
     }
     @discardableResult static func apply(_ choice: String, updateFinder: Bool = true) -> Bool {
         guard let image = image(choice) else { return false }
@@ -120,11 +111,11 @@ struct AppearanceSettings: View {
             if icon != "classic" {
                 Toggle("Icon background", isOn: Binding(get: { backgroundEnabled }, set: { value in
                     backgroundEnabled = value
-                    iconNotice = AppIconChoice.apply(icon) ? "" : "Dock icon updated. Finder may need a refresh."
+                    iconNotice = AppIconChoice.apply(icon) ? "" : "Could not apply the icon to Finder."
                 }))
                 Text("Turn off for a transparent mascot icon.").font(.caption).foregroundStyle(.secondary)
             }
-            if !iconNotice.isEmpty { Text(iconNotice).font(.caption).foregroundStyle(.secondary) }
+            if !iconNotice.isEmpty { Text(LocalizedStringKey(iconNotice)).font(.caption).foregroundStyle(.secondary) }
         }
     }
     private func themeButton(_ style: DeskTheme) -> some View {
@@ -153,7 +144,7 @@ struct AppearanceSettings: View {
     }
     private func chooseIcon(_ value: String) {
         icon = value
-        iconNotice = AppIconChoice.apply(value) ? "" : "Dock icon updated. Finder may need a refresh."
+        iconNotice = AppIconChoice.apply(value) ? "" : "Could not apply the icon to Finder."
     }
     private func iconButton(_ value: String, title: LocalizedStringKey) -> some View {
         Button { chooseIcon(value) } label: {

@@ -171,6 +171,7 @@ struct AssignmentSnapshot: Decodable {
     var retryAt: String? = nil
     var requiresLogin = false
     var timetable: Timetable? = nil
+    var gradeBook: SemesterGradeBook? = nil
 }
 
 struct TaskDay: Identifiable {
@@ -240,15 +241,17 @@ enum Beijing {
     static func dayLabel(_ date: Date) -> String { (displaysChinese ? chineseCalendarFormat : calendarFormat).string(from: date) }
     static func clock(_ date: Date) -> String { clockFormat.string(from: date) }
     static func dateTime(_ date: Date) -> String { (displaysChinese ? chineseDateTimeFormat : dateTimeFormat).string(from: date) }
-    static func shortDay(_ date: Date) -> String { (displaysChinese ? chineseShortDayFormat : shortDayFormat).string(from: date) }
+    static func shortDay(_ date: Date) -> String { shortDay(date, chinese: displaysChinese) }
+    static func shortDay(_ date: Date, chinese: Bool) -> String { (chinese ? chineseShortDayFormat : shortDayFormat).string(from: date) }
     static func weekday(_ date: Date) -> String { (displaysChinese ? chineseWeekdayFormat : weekdayFormat).string(from: date) }
     static func exportTime(_ date: Date) -> String { exportFormat.string(from: date) }
 
-    static func dueLabel(_ date: Date, relativeTo now: Date) -> String {
-        if calendar.isDate(date, inSameDayAs: now) { return (displaysChinese ? "今天 " : "Today ") + clock(date) }
+    static func dueLabel(_ date: Date, relativeTo now: Date, chinese language: Bool? = nil) -> String {
+        let chinese = language ?? displaysChinese
+        if calendar.isDate(date, inSameDayAs: now) { return (chinese ? "今天 " : "Today ") + clock(date) }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
-           calendar.isDate(date, inSameDayAs: tomorrow) { return (displaysChinese ? "明天 " : "Tomorrow ") + clock(date) }
-        return dateTime(date)
+           calendar.isDate(date, inSameDayAs: tomorrow) { return (chinese ? "明天 " : "Tomorrow ") + clock(date) }
+        return (chinese ? chineseDateTimeFormat : dateTimeFormat).string(from: date)
     }
 }
 
