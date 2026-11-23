@@ -242,6 +242,26 @@
 
 "Semester grades and goals" = "学期成绩与提分目标";
 "Sync Semester Grades" = "同步学期成绩";
+"Open School Grades" = "打开校宝动态成绩";
+"Import School Grades Dump…" = "导入校宝成绩采集文件…";
+"Import" = "导入";
+"School course grade" = "校宝课程总评";
+"Course GPA Points %@" = "课程绩点 %@";
+"Local estimate %@" = "明细试算 %@";
+"School Grade Categories" = "校宝评估项目与权重";
+"School GPA Scale" = "校宝绩点换算表";
+"School Archived GPA %@" = "校宝学期 GPA %@";
+"School Dynamic GPA %@" = "校宝动态 GPA %@";
+"School grades fetched %@" = "校宝成绩同步于 %@";
+"School grades captured %@" = "校宝成绩采集于 %@";
+"%lld items inferred from published grades" = "已根据发布成绩推算 %lld 个计分项";
+"About %lld counted items" = "估计 %lld 项";
+"Uses school category weights. Item counts are estimated where task grades match." = "使用各类校宝权重。已有项数根据与类别分吻合的任务成绩推算。";
+"The school provided the category grade. The number of counted items is unavailable." = "校宝已提供类别分，暂缺已计入的项目数。";
+"To reach the course goal, the category needs %@." = "要达到课程目标，该类别需达到 %@。";
+"Changing this category alone cannot reach the goal." = "仅提高这一类别无法达到目标。";
+"Next GPA tier %@ at %@" = "下一绩点档 %@ · 总评门槛 %@";
+"This course has no entry in the school GPA results." = "校宝当前的 GPA 结果中没有这门课。";
 "Syncing Grades…" = "正在同步成绩…";
 "Read published grades without downloading assignments or attachments." = "读取学校已公布的分数，无需下载作业正文和附件。";
 "The grade sync service stopped. Try again." = "成绩同步服务已退出，请重试。";
@@ -303,6 +323,9 @@
 "Credits" = "学分";
 "GPA Bonus" = "绩点加成";
 "Weight by category" = "按类别加权";
+"Skip ungraded categories" = "暂无成绩的类别暂不计入";
+"Calculate using the relative weights of categories with scores. A published zero still counts." = "按已有成绩类别的相对权重计算。已公布的零分正常计入。";
+"Use this only when empty categories truly have no grades." = "请确认空白类别在校宝中也暂无成绩。";
 "New Category" = "新类别名称";
 "Add Category" = "添加类别";
 "Positive category weights must add up to 100%." = "各类别权重合计须为 100%。";

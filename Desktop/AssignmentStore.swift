@@ -277,6 +277,16 @@ final class AssignmentStore: ObservableObject {
         } catch { gradeIssue = error.localizedDescription }
     }
 
+    func importGradeDump(_ folder: URL) {
+        guard !requesting else { return }
+        do {
+            if process == nil { try connect() }
+            gradeIssue = nil
+            if !send(["action": "import-grade-dump", "path": folder.path]) {
+                gradeIssue = "The grade sync service stopped. Try again."
+            }
+        } catch { gradeIssue = error.localizedDescription }
+    }
     func saveGradeImport(_ records: [ImportedGrade], term: String) throws {
         var next = importedGrades
         next.terms[term] = records
@@ -637,7 +647,9 @@ final class AssignmentStore: ObservableObject {
         if requestedAction == "configure" || requestedAction == "verify" {
             settingsIssue = "The sync service stopped. Try verifying again."
         }
-        if requestedAction == "grades" { gradeIssue = "The grade sync service stopped. Try again." }
+        if requestedAction == "grades" || requestedAction == "import-grade-dump" {
+            gradeIssue = "The grade sync service stopped. Try again."
+        }
         requestedAction = nil
         reconnectAt = Date().addingTimeInterval(15)
         stopBackend()
@@ -684,7 +696,7 @@ final class AssignmentStore: ObservableObject {
                     needsLogin = false
                     refreshAfterRequest = true
                 }
-            } else if event.operation == "grades" {
+            } else if event.operation == "grades" || event.operation == "import-grade-dump" {
                 gradeIssue = event.error
             } else if let error = event.error {
                 if event.operation != "timetable" {

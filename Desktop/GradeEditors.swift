@@ -124,10 +124,12 @@ struct GradeScenarioEditor: View {
     struct Course: Identifiable {
         let id, name: String
         let grades: CourseGrades
+        let school: SchoolDynamicCourse?
 
         var categories: [String] {
+            guard grades.canProject else { return [] }
             if !grades.rule.weighted { return [CourseGrades.totalGroup] }
-            return (grades.weights ?? [:]).filter { $0.value > 0 }.keys.sorted()
+            return (grades.weights ?? [:]).filter { $0.value > 0 && !grades.needsItemCount(in: $0.key) }.keys.sorted()
         }
     }
 
@@ -147,7 +149,7 @@ struct GradeScenarioEditor: View {
                 ForEach($initial) { $item in
                     HStack(spacing: 8) {
                         Picker("Subjects", selection: $item.course) {
-                            ForEach(eligible) { Text($0.name).tag($0.id) }
+                            ForEach(eligible.filter { !$0.categories.isEmpty }) { Text($0.name).tag($0.id) }
                         }.labelsHidden()
                             .onChange(of: item.course) { _, new in item.category = categoryList(new).first ?? "" }
                         if categoryList(item.course) != [CourseGrades.totalGroup] {
@@ -182,16 +184,16 @@ struct GradeScenarioEditor: View {
     }
 
     @ViewBuilder private var results: some View {
-        if let scale, valid, !initial.isEmpty {
-            let forecast = projection(using: scale)
-            let best = projection(using: scale, fraction: 1)
+        if valid, !initial.isEmpty {
+            let forecast = projection()
+            let best = projection(fraction: 1)
             if let predicted = forecast.average, let upper = best.average {
                 Text("Projected GPA \(number(predicted)) · With full marks \(number(upper))")
                     .fontWeight(.semibold)
                 Text("\(forecast.courses) of \(eligible.count) courses included")
                     .font(.caption).foregroundStyle(.secondary)
-                if let target {
-                    if let required = neededShare(using: scale, target: target) {
+                if let target, forecast.courses == eligible.count, best.courses == eligible.count {
+                    if let required = neededShare(target: target) {
                         Text("To reach \(number(target)), score at least \(percent(required)) of each planned maximum.")
                             .font(.callout)
                     } else {
@@ -208,7 +210,9 @@ struct GradeScenarioEditor: View {
         }
     }
 
-    private var eligible: [Course] { courses.filter { $0.grades.rule.excludedFromGPA != true } }
+    private var eligible: [Course] {
+        courses.filter { $0.grades.rule.excludedFromGPA != true && $0.school?.includedInGpa != false }
+    }
     private func categoryList(_ course: String) -> [String] { eligible.first { $0.id == course }?.categories ?? [] }
 
     private var valid: Bool {
@@ -219,31 +223,40 @@ struct GradeScenarioEditor: View {
         }
     }
 
-    private func projection(using scale: GPAScale, fraction: Double? = nil) -> GPACreditTotal {
+    private func projection(fraction: Double? = nil) -> GPACreditTotal {
         let items = Dictionary(grouping: initial, by: \.course)
         var result = GPACreditTotal()
         for course in eligible {
             var future: [String: GradePoints] = [:]
             guard let credits = GradePoints.number(course.grades.rule.credits), credits > 0 else { continue }
+            if items[course.id] == nil, let points = course.school?.points {
+                result.add(points: points, credits: credits)
+                continue
+            }
             for item in items[course.id, default: []] {
                 guard let maximum = GradePoints.number(item.maximum), let expected = GradePoints.number(item.expected) else { continue }
                 let earned = fraction.map { $0 * maximum } ?? expected
-                future[item.category, default: .empty].add(GradePoints(earned: earned, possible: maximum))
+                future[item.category, default: .empty].add(
+                    course.grades.itemTotals(GradePoints(earned: earned, possible: maximum))
+                )
             }
-            if let percent = course.grades.percent(additions: future), let points = scale.points(at: percent) {
-                result.add(points: points + (GradePoints.number(course.grades.rule.bonus) ?? 0), credits: credits)
+            let schoolScale = course.school?.scale
+            if let percent = course.grades.percent(additions: future),
+               let points = (schoolScale ?? scale)?.points(at: percent) {
+                let bonus = schoolScale == nil ? (GradePoints.number(course.grades.rule.bonus) ?? 0) : 0
+                result.add(points: points + bonus, credits: credits)
             }
         }
         return result
     }
 
-    private func neededShare(using scale: GPAScale, target: Double) -> Double? {
-        guard let best = projection(using: scale, fraction: 1).average, best >= target - 1e-9 else { return nil }
-        if let floor = projection(using: scale, fraction: 0).average, floor >= target - 1e-9 { return 0 }
+    private func neededShare(target: Double) -> Double? {
+        guard let best = projection(fraction: 1).average, best >= target - 1e-9 else { return nil }
+        if let floor = projection(fraction: 0).average, floor >= target - 1e-9 { return 0 }
         var lower = 0.0, upper = 1.0
         for _ in 0..<36 {
             let midpoint = (lower + upper) / 2
-            if let result = projection(using: scale, fraction: midpoint).average, result >= target - 1e-9 { upper = midpoint }
+            if let result = projection(fraction: midpoint).average, result >= target - 1e-9 { upper = midpoint }
             else { lower = midpoint }
         }
         return upper

@@ -20,6 +20,44 @@ struct SemesterGradeBook: Decodable {
     var schoolGpa: String?
     var schoolScores: [PublishedCourseScore]?
     var records: [SchoolGrade]
+    let dynamic: SchoolDynamicGrades?
+    let dynamicIssue: String?
+}
+
+struct SchoolDynamicGrades: Decodable {
+    let checkedAt: String
+    let gpa: Double?
+    let archived: Bool
+    let courses: [SchoolDynamicCourse]
+    let fromDump: Bool?
+}
+
+struct SchoolDynamicCourse: Decodable, Identifiable {
+    let id, name, englishName, className: String
+    let percent, points: Double?
+    let level: String?
+    let ranges: [SchoolGPARange]
+    let categories: [SchoolGradeCategory]?
+    let includedInGpa: Bool?
+
+    var aliases: Set<String> { Set([name, englishName].filter { !$0.isEmpty }) }
+
+    var scale: GPAScale? { GPAScale(ranges: ranges) }
+}
+
+struct SchoolGPARange: Decodable {
+    let minimum, maximum: Double
+    let includesMinimum, includesMaximum: Bool
+    let level: String
+    let points: Double?
+}
+
+struct SchoolGradeCategory: Decodable {
+    let name, englishName: String
+    let weight, score: Double?
+    let level: String?
+    let children: [SchoolGradeCategory]
+    let estimatedCount: Int?
 }
 
 struct GradePoints: Codable, Equatable {
@@ -58,6 +96,7 @@ struct GradingRule: Codable, Equatable {
     var weights: [String: String] = [:]
     var pastPoints: [String: GradePoints] = [:]
     var excludedFromGPA: Bool?
+    var ignoreUngradedCategories: Bool?
 }
 
 struct ReportedGPA: Codable, Equatable {
@@ -93,9 +132,14 @@ struct CourseGrades {
     private(set) var scored = 0
     private(set) var unscored = 0
     private(set) var omitted = 0
+    private(set) var averagesItems = false
+    private(set) var canProject = true
+    private var fixedPercentages: [String: Double] = [:]
 
-    init(records: [SchoolGrade], rule: GradingRule, groups: [String: String] = [:], excluded: Set<String> = []) {
+    init(records: [SchoolGrade], rule: GradingRule, groups: [String: String] = [:], excluded: Set<String> = [],
+         canProject: Bool = true) {
         self.rule = rule
+        self.canProject = canProject
         for grade in records {
             if grade.exempt || excluded.contains(grade.id) { omitted += 1; continue }
             guard let points = grade.points else { unscored += 1; continue }
@@ -108,7 +152,34 @@ struct CourseGrades {
         }
     }
 
+    init?(school: SchoolDynamicCourse, rule: GradingRule) {
+        guard let parts = school.categories, let published = school.percent, !parts.isEmpty,
+              Set(parts.map(\.name)).count == parts.count,
+              parts.allSatisfy({ !$0.name.isEmpty && $0.children.isEmpty && $0.weight != nil }) else { return nil }
+        var rule = rule
+        rule.weighted = true
+        rule.ignoreUngradedCategories = true
+        rule.weights = Dictionary(uniqueKeysWithValues: parts.compactMap { part in
+            part.weight.map { (part.name, String($0)) }
+        })
+        self.rule = rule
+        averagesItems = true
+        for part in parts {
+            guard let score = part.score else { continue }
+            if let count = part.estimatedCount, count > 0 {
+                totals[part.name] = GradePoints(earned: score / 100 * Double(count), possible: Double(count))
+                scored += count
+            } else {
+                fixedPercentages[part.name] = score
+            }
+        }
+        guard let calculated = percent(), abs(calculated - published) <= 0.011 else { return nil }
+    }
+
+    func needsItemCount(in group: String) -> Bool { fixedPercentages[group] != nil }
+
     var weights: [String: Double]? {
+        guard canProject else { return nil }
         guard rule.weighted else { return [Self.totalGroup: 1] }
         let parsed = rule.weights.filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
             .compactMapValues { GradePoints.number($0).map { $0 / 100 } }
@@ -118,44 +189,69 @@ struct CourseGrades {
         return parsed
     }
 
-    func percent(additional: GradePoints = .empty, to group: String = totalGroup) -> Double? {
-        percent(additions: additional.possible > 0 ? [group: additional] : [:])
+    func itemTotals(_ points: GradePoints, count: Int = 1) -> GradePoints {
+        guard averagesItems, let percent = points.percent else { return points }
+        let count = Double(count)
+        return GradePoints(earned: percent / 100 * count, possible: count)
+    }
+
+    func percent(additional: GradePoints = .empty, to group: String = totalGroup, count: Int = 1) -> Double? {
+        percent(additions: additional.possible > 0 ? [group: itemTotals(additional, count: count)] : [:])
     }
 
     func percent(additions: [String: GradePoints]) -> Double? {
-        guard let weights, Set(additions.keys).isSubset(of: Set(weights.keys)) else { return nil }
+        guard let weights, Set(additions.keys).isSubset(of: Set(weights.keys)),
+              additions.keys.allSatisfy({ !needsItemCount(in: $0) }) else { return nil }
         var points = totals
         for (name, additional) in additions { points[name, default: .empty].add(additional) }
-        var result = 0.0
+        guard let result = weightedResult(points, weights: weights), result.weight > 0 else { return nil }
+        return result.sum / result.weight
+    }
+
+    private func weightedResult(_ points: [String: GradePoints], weights: [String: Double])
+        -> (sum: Double, weight: Double)? {
+        var sum = 0.0
+        var activeWeight = 0.0
         for (name, weight) in weights where weight > 0 {
-            guard let percent = points[name]?.percent else { return nil }
-            result += weight * percent
+            guard let percent = points[name]?.percent ?? fixedPercentages[name] else {
+                if rule.ignoreUngradedCategories == true { continue }
+                return nil
+            }
+            sum += weight * percent
+            activeWeight += weight
         }
-        return result
+        return (sum, activeWeight)
     }
 
     private func categoryTarget(_ target: Double, in group: String) -> Double? {
-        guard let weights, let weight = weights[group], weight > 0 else { return nil }
-        var other = 0.0
-        for (name, fraction) in weights where name != group && fraction > 0 {
-            guard let percent = totals[name]?.percent else { return nil }
-            other += fraction * percent
-        }
-        return (target - other) / (weight * 100)
+        guard var weights, let weight = weights.removeValue(forKey: group), weight > 0,
+              let other = weightedResult(totals, weights: weights) else { return nil }
+        return (target * (weight + other.weight) - other.sum) / (weight * 100)
     }
 
-    func requiredScore(target: Double, addedMaximum: Double, in group: String) -> Double? {
-        guard addedMaximum > 0, let fraction = categoryTarget(target, in: group) else { return nil }
+    func neededCategoryPercent(target: Double, in group: String) -> Double? {
+        categoryTarget(target, in: group).map { max(0, $0 * 100) }
+    }
+
+    func requiredScore(target: Double, addedMaximum: Double, in group: String, count: Int = 1) -> Double? {
+        guard addedMaximum > 0, count > 0, !needsItemCount(in: group),
+              let fraction = categoryTarget(target, in: group) else { return nil }
         let current = totals[group, default: .empty]
+        if averagesItems {
+            let units = Double(count)
+            return max(0, fraction * (current.possible + units) - current.earned) * addedMaximum / units
+        }
         return max(0, fraction * (current.possible + addedMaximum) - current.earned)
     }
 
     func minimumCount(target: Double, maximum: Double, expected: Double, in group: String) -> Int? {
-        guard maximum > 0, (0...maximum).contains(expected), let fraction = categoryTarget(target, in: group) else { return nil }
+        guard maximum > 0, (0...maximum).contains(expected), !needsItemCount(in: group),
+              let fraction = categoryTarget(target, in: group) else { return nil }
         let current = totals[group, default: .empty]
         let gap = fraction * current.possible - current.earned
-        if current.possible > 0 && gap <= 1e-9 { return 0 }
-        let gain = expected - fraction * maximum
+        if let currentPercent = percent(), currentPercent + 1e-9 >= target { return 0 }
+        let next = itemTotals(GradePoints(earned: expected, possible: maximum))
+        let gain = next.earned - fraction * next.possible
         if current.possible == 0 { return gain >= -1e-9 ? 1 : nil }
         guard gain > 1e-9 else { return nil }
         let count = ceil(gap / gain - 1e-9)
@@ -166,6 +262,7 @@ struct CourseGrades {
 struct GPAScale {
     struct Step { let minimum, points: Double }
     let steps: [Step]
+    private let ranges: [SchoolGPARange]
 
     init?(_ text: String) {
         var steps: [Step] = []
@@ -179,9 +276,36 @@ struct GPAScale {
         guard steps.first?.minimum == 0,
               zip(steps, steps.dropFirst()).allSatisfy({ $0.minimum < $1.minimum && $0.points <= $1.points }) else { return nil }
         self.steps = steps
+        ranges = []
     }
 
-    func points(at percent: Double) -> Double? { steps.last { $0.minimum <= percent + 1e-9 }?.points }
+    init?(ranges: [SchoolGPARange]) {
+        let usable = ranges.filter { $0.points != nil }
+        guard !usable.isEmpty else { return nil }
+        self.ranges = usable
+        steps = usable.compactMap { range in
+            guard let points = range.points else { return nil }
+            var minimum = ceil(range.minimum * 10 - 1e-9)
+            if !range.includesMinimum && abs(minimum / 10 - range.minimum) < 1e-9 { minimum += 1 }
+            let value = minimum / 10
+            guard value < range.maximum || (value == range.maximum && range.includesMaximum) else { return nil }
+            return Step(minimum: value, points: points)
+        }.sorted { $0.minimum < $1.minimum }
+    }
+
+    func points(at percent: Double) -> Double? {
+        if ranges.isEmpty { return steps.last { $0.minimum <= percent + 1e-9 }?.points }
+        let scaled = percent * 10
+        let floorValue = floor(scaled)
+        let half = floorValue + 0.5
+        let aboveHalf = scaled > half || (scaled == half && (-scaled).addingProduct(percent, 10) >= 0)
+        let rounded = (floorValue + (aboveHalf ? 1 : 0)) / 10
+        return ranges.last {
+            (rounded > $0.minimum || (rounded == $0.minimum && $0.includesMinimum)) &&
+                (rounded < $0.maximum || (rounded == $0.maximum && $0.includesMaximum))
+        }?.points
+    }
+
     func minimumPercent(for points: Double) -> Double? { steps.first { $0.points >= points - 1e-9 }?.minimum }
 
     static let example = "90=4.0\n80=3.0\n70=2.0\n60=1.0\n0=0.0"
