@@ -74,7 +74,7 @@ struct GradePreferences: Codable, Equatable {
     var omitted: Set<String> = []
     var scale = ""
     var reported: [String: ReportedGPA]?
-    var estimateMaximum: Int?
+    var weightedEstimate: Bool?
     var sectionPlans: [String: [GradeSectionInput]]?
     var priorTerms: [String: PriorGPA]?
     var scenarios: [String: [PlannedGrade]]?
@@ -229,7 +229,7 @@ struct OverallEstimate {
     let valid: Bool
 
     init(records: [SchoolGrade], courses: [String], term: String, preferences: GradePreferences, projected: Bool = false) {
-        maximum = preferences.estimateMaximum == 5 ? 5 : 4
+        maximum = preferences.weightedEstimate == false ? 4 : 5
         let scale = GPAScale(GPAScale.example)!
         let groups = Dictionary(grouping: records, by: \.course)
         var aggregate = GPACreditTotal()
@@ -250,11 +250,25 @@ struct OverallEstimate {
             }
             guard let percent, let points = scale.points(at: percent),
                   let credits = rule.credits.isEmpty ? 1.0 : GradePoints.number(rule.credits), credits > 0 else { continue }
-            aggregate.add(points: points * Double(maximum) / 4, credits: credits)
+            let bonus: Double
+            if maximum == 5 && points > 0 {
+                let names = [id, groups[id]?.first?.subject ?? ""]
+                bonus = GradePoints.number(rule.bonus) ?? Self.defaultBonus(names)
+            } else {
+                bonus = 0
+            }
+            aggregate.add(points: min(Double(maximum), points + bonus), credits: credits)
         }
         total = aggregate
         eligible = count
         valid = validInputs
+    }
+
+    private static func defaultBonus(_ names: [String]) -> Double {
+        for name in names {
+            if name.range(of: #"(?i)(?:^|[^a-z])(?:ap(?=[^a-z]|$)|advanced placement\b)"#, options: .regularExpression) != nil { return 1 }
+        }
+        return names.contains { $0.localizedCaseInsensitiveContains("honors") || $0.contains("荣誉") } ? 0.5 : 0
     }
 
     func cumulative(prior: PriorGPA) -> Double? {

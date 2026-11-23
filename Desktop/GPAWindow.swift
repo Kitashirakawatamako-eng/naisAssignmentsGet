@@ -298,7 +298,7 @@ struct GPAWindow: View {
         let rows = pref.sectionPlans?[key] ?? []
         let current = OverallEstimate(records: allRecords, courses: courses.map(\.id), term: term, preferences: pref)
         let projected = OverallEstimate(records: allRecords, courses: courses.map(\.id), term: term, preferences: pref, projected: true)
-        let priorKey = term + "/" + String(current.maximum)
+        let priorKey = term + (current.maximum == 5 ? "/weighted" : "/4")
         let prior = pref.priorTerms?[priorKey] ?? PriorGPA()
         func save(_ rows: [GradeSectionInput]) {
             update { $0.sectionPlans = ($0.sectionPlans ?? [:]).merging([key: rows]) { _, new in new } }
@@ -325,14 +325,14 @@ struct GPAWindow: View {
             HStack {
                 Label("Overall GPA estimate", systemImage: "sum").font(.headline)
                 Spacer()
-                Picker("Display scale", selection: Binding(get: { current.maximum }, set: { value in update { $0.estimateMaximum = value } })) {
-                    Text(verbatim: "4.0").tag(4)
-                    Text(verbatim: "5.0").tag(5)
-                }.pickerStyle(.segmented).frame(width: 130)
+                Picker("Display scale", selection: Binding(get: { current.maximum }, set: { value in update { $0.weightedEstimate = value == 5 } })) {
+                    Text("Unweighted 4.0").tag(4)
+                    Text("Weighted 5.0").tag(5)
+                }.pickerStyle(.segmented).fixedSize()
             }
             LabeledContent("Semester total", value: display(current.total.average))
             Text("\(current.total.courses) of \(current.eligible) courses included").font(.caption)
-            Text("90 / 80 / 70 / 60% earn 4 / 3 / 2 / 1 points. Below 60% earns 0. The 5.0 display multiplies these points by 1.25. Blank course credits count as 1.").font(.caption).foregroundStyle(.secondary)
+            Text("90 / 80 / 70 / 60% earn 4 / 3 / 2 / 1 points. Weighted GPA adds 1 for AP or 0.5 for Honors on passing grades, up to 5. Change bonuses in Course Credits. Blank credits count as 1.").font(.caption).foregroundStyle(.secondary)
             DisclosureGroup("Cumulative GPA across semesters") {
                 HStack {
                     input("Previous cumulative GPA", text: previous(\.average))

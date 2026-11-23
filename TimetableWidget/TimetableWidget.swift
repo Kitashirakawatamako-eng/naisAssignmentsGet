@@ -175,7 +175,7 @@ private struct AssignmentWidgetView: View {
                 if let summary = entry.data?.gpa, let estimate = summary.estimate {
                     Text(verbatim: String(format: "%.2f / %d.0", estimate, summary.maximum ?? 4))
                         .font(.title.bold()).minimumScaleFactor(0.7).privacySensitive()
-                    Text("Estimated semester GPA").font(.caption)
+                    Text(summary.maximum == 5 ? "Weighted GPA estimate" : "Unweighted GPA estimate").font(.caption)
                     Text("\(summary.included) of \(summary.eligible) courses included").font(.caption2)
                 } else if let value = entry.data?.gpa?.transcript, !value.isEmpty {
                     Text(value).font(.largeTitle.bold()).privacySensitive()

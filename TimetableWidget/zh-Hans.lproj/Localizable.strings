@@ -34,3 +34,5 @@
 "Edit" = "编辑";
 "Estimated semester GPA" = "学期绩点估算";
 "Open Grades and sync semester scores." = "打开成绩页并同步本学期成绩。";
+"Weighted GPA estimate" = "加权绩点估算";
+"Unweighted GPA estimate" = "未加权绩点估算";

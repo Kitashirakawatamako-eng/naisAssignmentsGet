@@ -405,7 +405,6 @@
 "Overall GPA estimate" = "总绩点估算";
 "Display scale" = "显示分制";
 "Semester total" = "本学期总绩点";
-"90 / 80 / 70 / 60% earn 4 / 3 / 2 / 1 points. Below 60% earns 0. The 5.0 display multiplies these points by 1.25. Blank course credits count as 1." = "成绩达到 90、80、70、60 分分别计 4、3、2、1 点，低于 60 分计 0 点。五分制按比例乘以 1.25，未填写的课程学分按 1 计算。";
 "Cumulative GPA across semesters" = "跨学期累计绩点";
 "Previous cumulative GPA" = "此前累计绩点";
 "Previous credits" = "此前累计学分";
@@ -422,3 +421,7 @@
 "Complete all planned scores and make each planned course’s weights total 100%." = "请填写所有试算分数，并确保每门试算课程的权重之和为 100%。";
 "Projected semester GPA" = "预计学期绩点";
 "Projected cumulative GPA" = "预计累计绩点";
+
+"Unweighted 4.0" = "未加权 4.0";
+"Weighted 5.0" = "加权 5.0";
+"90 / 80 / 70 / 60% earn 4 / 3 / 2 / 1 points. Weighted GPA adds 1 for AP or 0.5 for Honors on passing grades, up to 5. Change bonuses in Course Credits. Blank credits count as 1." = "90、80、70、60 分分别计 4、3、2、1 点。及格的 AP 课程加 1 点，荣誉课程加 0.5 点，上限 5 点。可在课程学分中调整加分，留空的学分按 1 计算。";

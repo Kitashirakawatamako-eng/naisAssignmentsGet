@@ -87,15 +87,21 @@ import Foundation
         var preferences = GradePreferences()
         let actual = OverallEstimate(records: [score], courses: ["math", "art"], term: "fall", preferences: preferences)
         assert(actual.total.average == 3 && actual.total.courses == 1 && actual.eligible == 2)
-        preferences.estimateMaximum = 5
+        assert(actual.maximum == 5)
+        let ap = SchoolGrade(id: "ap", course: "AP物理", subject: "Physics", title: "Exam", category: "",
+                             day: nil, score: "85", total: "100", level: nil, exempt: false)
+        assert(OverallEstimate(records: [score, ap], courses: [], term: "fall", preferences: preferences).total.average == 3.5)
+        preferences.weightedEstimate = false
+        assert(OverallEstimate(records: [score, ap], courses: [], term: "fall", preferences: preferences).total.average == 3)
+        preferences.weightedEstimate = true
         let key = "fall\u{1f}math"
         let plan = [GradeSectionInput(weight: "60", score: "100"), GradeSectionInput(weight: "40", score: "75")]
         preferences.sectionPlans = [key: plan]
         let projected = OverallEstimate(records: [score], courses: ["math"], term: "fall", preferences: preferences, projected: true)
-        assert(projected.valid && projected.total.average == 5)
-        assert(projected.cumulative(prior: PriorGPA(average: "3", credits: "3")) == 3.5)
+        assert(projected.valid && projected.total.average == 4)
+        assert(projected.cumulative(prior: PriorGPA(average: "3", credits: "3")) == 3.25)
         let observed = OverallEstimate(records: [score], courses: [], term: "fall", preferences: preferences)
-        assert(observed.total.average == 3.75)
+        assert(observed.total.average == 3)
         preferences.sectionPlans = [key: Array(plan.prefix(1))]
         assert(!OverallEstimate(records: [score], courses: [], term: "fall", preferences: preferences, projected: true).valid)
         let points = CourseGrades(records: [score], rule: GradingRule())
