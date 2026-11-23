@@ -60,6 +60,8 @@ final class AssignmentStore: ObservableObject {
     let assistant: HomeworkAssistant
     let root: URL
     private let resources: URL?
+    private var schoolTasks: [Assignment] = []
+    private var completionOverrides = UserDefaults.standard.dictionary(forKey: "homeworkFinishedOverrides") as? [String: Bool] ?? [:]
     private let defaults = UserDefaults.standard
     private var process: Process?
     private var input: FileHandle?
@@ -96,6 +98,7 @@ final class AssignmentStore: ObservableObject {
         globalPins = globals
         if let cached = try? Data(contentsOf: root.appendingPathComponent("data/timetable.json")) {
             snapshot.timetable = try? Self.backendDecoder().decode(Timetable.self, from: cached)
+            snapshot.timetable?.courses.removeAll { !CourseVisibility.includes($0.title) }
         }
     }
 
@@ -455,15 +458,66 @@ final class AssignmentStore: ObservableObject {
         selectedID = id
     }
 
+    func localCompletion(_ id: String) -> Bool? { completionOverrides[id] }
+
+    func setCompletion(_ finished: Bool?, for id: String) {
+        completionOverrides[id] = finished
+        defaults.set(completionOverrides, forKey: "homeworkFinishedOverrides")
+        snapshot.tasks = resolvedTasks()
+        keepSelection()
+        publishWidgets()
+        assistant.update(snapshot.tasks)
+    }
+
+    private func resolvedTasks() -> [Assignment] {
+        schoolTasks.map { school in
+            var task = school
+            if let finished = completionOverrides[task.id] { task.pending = !finished }
+            return task
+        }
+    }
+
     func publishWidgets() {
         guard !loading else { return }
         let pins = pinnedTasks
-        let data = WidgetSnapshot(theme: DeskTheme.current.rawValue,
+        var data = WidgetSnapshot(theme: DeskTheme.current.rawValue,
             language: defaults.string(forKey: "interfaceLanguage") ?? "zh-Hans",
             timetable: snapshot.timetable,
             pins: pins.prefix(3).map { WidgetAssignment(id: $0.id, title: $0.title,
                 subject: $0.subject, due: Beijing.parse($0.due), pending: $0.pending) },
             pinCount: pins.count)
+        // Keep dated, unfinished work independently of the assignments screen's filters.
+        // Pins take priority, with the closest upcoming due time first within each group.
+        let pinnedIDs = globalPins.union(filterPins)
+        data.deadlines = snapshot.tasks.compactMap { task -> WidgetAssignment? in
+            guard task.pending, let due = Beijing.parse(task.due), due > now else { return nil }
+            return WidgetAssignment(id: task.id, title: task.title, subject: task.subject, due: due, pending: true)
+        }.sorted { left, right in
+            if pinnedIDs.contains(left.id) != pinnedIDs.contains(right.id) { return pinnedIDs.contains(left.id) }
+            if left.due != right.due { return left.due! < right.due! }
+            return left.id < right.id
+        }.prefix(32).map { $0 }
+        data.preferredContent = defaults.string(forKey: "widgetContent") ?? "deadlines"
+        data.secondContent = defaults.string(forKey: "secondWidgetContent") ?? "gpa"
+        data.slots = [:]
+        for slot in ["1", "2"] {
+            let scope = defaults.string(forKey: "widgetPinScope" + slot)
+            let chosen: [Assignment]
+            switch scope {
+            case "global": chosen = globalPinnedTasks
+            case "filtered": chosen = rows.filter { filterPins.contains($0.id) }
+            case "single":
+                let id = defaults.string(forKey: "widgetTask" + slot)
+                chosen = snapshot.tasks.filter { $0.id == id }
+            default: chosen = pins
+            }
+            data.slots?[slot] = WidgetSlotAppearance(
+                color: defaults.string(forKey: "widgetColor" + slot) ?? "theme",
+                pins: chosen.prefix(3).map {
+                    WidgetAssignment(id: $0.id, title: $0.title, subject: $0.subject, due: Beijing.parse($0.due), pending: $0.pending)
+                }, count: chosen.count)
+        }
+        data.gpa = widgetGPA()
         let path = WidgetSnapshot.file(in: root)
         guard let encoded = try? data.encoded(), encoded != publishedWidgetData else { return }
         do {
@@ -477,6 +531,15 @@ final class AssignmentStore: ObservableObject {
         } catch {
             // Keep the last readable widget snapshot and retry on the next pulse.
         }
+    }
+
+    private func widgetGPA() -> WidgetGPA {
+        let pref = defaults.data(forKey: "gradePreferences").flatMap { try? JSONDecoder().decode(GradePreferences.self, from: $0) } ?? GradePreferences()
+        let term = snapshot.gradeBook?.semesterId ?? ""
+        let records = GradeCSV.merged(school: snapshot.gradeBook?.records ?? [], imported: importedGrades.terms[term] ?? [])
+        let estimate = OverallEstimate(records: records, courses: courses.map(\.id), term: term, preferences: pref)
+        return WidgetGPA(transcript: pref.reported?[term]?.semester, estimate: estimate.total.average,
+                         included: estimate.total.courses, eligible: estimate.eligible, maximum: estimate.maximum, exampleScale: true)
     }
 
     private func showError(_ text: String, detail: String?) {
@@ -596,7 +659,12 @@ final class AssignmentStore: ObservableObject {
         switch event.event {
         case "snapshot":
             guard let data = event.data else { return }
-            snapshot = data
+            schoolTasks = data.tasks.filter { CourseVisibility.includes($0.course, $0.subject) }
+            var resolved = data
+            resolved.timetable?.courses.removeAll { !CourseVisibility.includes($0.title) }
+            resolved.gradeBook?.records.removeAll { !CourseVisibility.includes($0.course, $0.subject) }
+            resolved.tasks = resolvedTasks()
+            snapshot = resolved
             syncIssue = data.syncError
             needsLogin = data.requiresLogin
             loading = false

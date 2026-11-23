@@ -216,7 +216,7 @@ enum GradeCSV {
                 result[position] = supplement(result[position], from: item.grade)
             }
         }
-        return result.sorted {
+        return result.filter { CourseVisibility.includes($0.course, $0.subject) }.sorted {
             if $0.day == $1.day { return $0.id < $1.id }
             return ($0.day ?? "") > ($1.day ?? "")
         }

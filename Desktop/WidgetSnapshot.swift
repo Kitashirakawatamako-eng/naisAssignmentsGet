@@ -18,6 +18,14 @@ struct WidgetSnapshot: Codable {
     let pins: [WidgetAssignment]
     let pinCount: Int
 
+    var deadlines: [WidgetAssignment]?
+    var gpa: WidgetGPA?
+    var preferredContent: String?
+    var secondContent: String?
+    var slots: [String: WidgetSlotAppearance]?
+
+
+    static let gradesURL = URL(string: "spassignments://grades")!
     static let timetableURL = URL(string: "spassignments://timetable")!
     static let assignmentURL = URL(string: "spassignments://assignments")!
 
@@ -35,4 +43,19 @@ struct WidgetSnapshot: Codable {
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(Self.self, from: data)
     }
+}
+
+struct WidgetGPA: Codable {
+    var transcript: String?
+    var estimate: Double?
+    var included: Int
+    var eligible: Int
+    var maximum: Int?
+    var exampleScale: Bool
+}
+
+struct WidgetSlotAppearance: Codable {
+    let color: String
+    let pins: [WidgetAssignment]
+    let count: Int
 }

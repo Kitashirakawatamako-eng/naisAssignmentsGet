@@ -2,20 +2,52 @@ import AppKit
 import SwiftUI
 
 struct DeskTabs: View {
-    @AppStorage("interfaceLanguage") private var interfaceLanguage = "zh-Hans"
     @Binding var page: DeskPage
 
     var body: some View {
-        HStack {
-        Button(interfaceLanguage == "en" ? "中文" : "English") {
-            interfaceLanguage = interfaceLanguage == "en" ? "zh-Hans" : "en"
-        }
+        VStack(alignment: .trailing, spacing: 6) {
+        LanguageMenu()
         Picker("App Page", selection: $page) {
             ForEach(DeskPage.allCases) { page in Text(LocalizedStringKey(page.rawValue)).tag(page) }
         }
         .labelsHidden()
         .pickerStyle(.segmented)
         .fixedSize()
+        }
+    }
+}
+
+struct LanguageMenu: View {
+    @AppStorage("interfaceLanguage") private var language = "zh-Hans"
+
+    var body: some View {
+        Menu {
+            Picker("语言 / Language", selection: $language) {
+                Text(verbatim: "English").tag("en")
+                Text(verbatim: "简体中文").tag("zh-Hans")
+            }
+        } label: {
+            Label {
+                Text(verbatim: language == "en" ? "Language: English" : "语言：简体中文")
+            } icon: { Image(systemName: "globe") }
+        }
+        .fixedSize()
+        .help("语言 / Language — English / 简体中文")
+        .accessibilityLabel("语言 / Language")
+        .accessibilityValue(language == "en" ? "English" : "简体中文")
+    }
+}
+
+struct LanguageSettings: View {
+    @AppStorage("interfaceLanguage") private var language = "zh-Hans"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("语言 / Language", systemImage: "globe").font(.headline)
+            Picker("语言 / Language", selection: $language) {
+                Text(verbatim: "English").tag("en")
+                Text(verbatim: "简体中文").tag("zh-Hans")
+            }
+            .pickerStyle(.segmented).labelsHidden()
         }
     }
 }

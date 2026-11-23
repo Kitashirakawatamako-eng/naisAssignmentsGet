@@ -94,6 +94,8 @@ def build_widget(contents, cache, architecture):
         "-module-cache-path", cache, SOURCE / "Desktop/AssignmentData.swift", SOURCE / "Desktop/GPAData.swift",
         SOURCE / "Desktop/DeskTheme.swift", SOURCE / "Desktop/WidgetSnapshot.swift",
         SOURCE / "Desktop/Timetable.swift", source / "TimetableWidget.swift", "-o", executable)
+    # Finder metadata copied from a desktop checkout is not permitted on signed extensions.
+    run("/usr/bin/xattr", "-cr", bundle)
     run("/usr/bin/codesign", "--force", "--sign", "-", "--entitlements",
         source / "TimetableWidget.entitlements", bundle)
 
@@ -107,8 +109,8 @@ def build_app(stage, runtime, architecture):
     resources.mkdir()
     shutil.copyfile(SOURCE / "Desktop/Info.plist", contents / "Info.plist")
     shutil.copyfile(SOURCE / "Desktop/AppIcon.icns", resources / "AppIcon.icns")
-    for name in ("ClassicIcon.icns", "OtterTransparentIcon.icns", "CreatureTransparentIcon.icns",
-                 "OtterTransparentIconSource.png", "CreatureTransparentIconSource.png", "OtterBackground.png", "PaleoBackground.png"):
+    for name in ("BookOtter.png", "ClassicIcon.icns", "OtterTransparentIcon.icns", "CreatureTransparentIcon.icns",
+                 "OtterTransparentIconSource.png", "CreatureTransparentIconSource.png"):
         shutil.copyfile(SOURCE / "Desktop" / name, resources / name)
     for localization in (SOURCE / "Desktop").glob("*.lproj"):
         shutil.copytree(localization, resources / localization.name)
@@ -196,6 +198,10 @@ def install_app(bundle, destination, stage):
     stop_retired_widget(previous, destination)
     widget = destination / WIDGET_BUNDLE
     if widget.is_dir():
+        # Register the new containing app before asking PlugInKit to discover its widgets.
+        registrar = Path("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+        if registrar.is_file():
+            subprocess.run([str(registrar), "-f", str(destination)], capture_output=True)
         registration = subprocess.run(["/usr/bin/pluginkit", "-a", str(widget)], capture_output=True, text=True)
         if registration.returncode:
             print("Widget registration will be retried by macOS when the app opens.", file=sys.stderr)

@@ -13,7 +13,7 @@ struct SemesterGradeBook: Decodable {
     let semesterId, startDay, endDay, checkedAt: String?
     let lastAttemptAt, syncIssue: String?
     let sourcePublishedCount: Int?
-    let records: [SchoolGrade]
+    var records: [SchoolGrade]
 }
 
 struct GradePoints: Codable, Equatable {
@@ -74,6 +74,9 @@ struct GradePreferences: Codable, Equatable {
     var omitted: Set<String> = []
     var scale = ""
     var reported: [String: ReportedGPA]?
+    var estimateMaximum: Int?
+    var sectionPlans: [String: [GradeSectionInput]]?
+    var priorTerms: [String: PriorGPA]?
     var scenarios: [String: [PlannedGrade]]?
 }
 
@@ -192,5 +195,82 @@ struct GPACreditTotal {
 
     func pointsNeeded(to target: Double, courseCredits: Double) -> Double {
         ((credits + courseCredits) * target - weightedPoints) / courseCredits
+    }
+}
+
+struct GradeSectionInput: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var name = ""
+    var weight = ""
+    var score = ""
+
+    static func projectedPercent(_ rows: [Self]) -> Double? {
+        var totalWeight = 0.0
+        var total = 0.0
+        for row in rows {
+            guard let weight = GradePoints.number(row.weight), weight > 0, weight <= 100,
+                  let score = GradePoints.number(row.score), score <= 100 else { return nil }
+            totalWeight += weight
+            total += weight * score / 100
+        }
+        return abs(totalWeight - 100) < 0.000001 ? total : nil
+    }
+}
+
+struct PriorGPA: Codable, Equatable {
+    var average = ""
+    var credits = ""
+}
+
+struct OverallEstimate {
+    let total: GPACreditTotal
+    let eligible: Int
+    let maximum: Int
+    let valid: Bool
+
+    init(records: [SchoolGrade], courses: [String], term: String, preferences: GradePreferences, projected: Bool = false) {
+        maximum = preferences.estimateMaximum == 5 ? 5 : 4
+        let scale = GPAScale(GPAScale.example)!
+        let groups = Dictionary(grouping: records, by: \.course)
+        var aggregate = GPACreditTotal()
+        var count = 0
+        var validInputs = true
+        for id in Set(courses).union(groups.keys).sorted() {
+            let key = term + "\u{1f}" + id
+            let rule = preferences.rules[key] ?? GradingRule()
+            guard rule.excludedFromGPA != true else { continue }
+            count += 1
+            let percent: Double?
+            if projected, let rows = preferences.sectionPlans?[key], !rows.isEmpty {
+                percent = GradeSectionInput.projectedPercent(rows)
+                if percent == nil { validInputs = false }
+            } else {
+                percent = CourseGrades(records: groups[id] ?? [], rule: rule, groups: preferences.groups,
+                                       excluded: preferences.omitted).percent()
+            }
+            guard let percent, let points = scale.points(at: percent),
+                  let credits = rule.credits.isEmpty ? 1.0 : GradePoints.number(rule.credits), credits > 0 else { continue }
+            aggregate.add(points: points * Double(maximum) / 4, credits: credits)
+        }
+        total = aggregate
+        eligible = count
+        valid = validInputs
+    }
+
+    func cumulative(prior: PriorGPA) -> Double? {
+        guard valid, total.credits > 0, let previous = GradePoints.number(prior.average), previous <= Double(maximum),
+              let credits = GradePoints.number(prior.credits), credits > 0 else { return nil }
+        return (previous * credits + total.weightedPoints) / (credits + total.credits)
+    }
+}
+
+enum CourseVisibility {
+    static func includes(_ names: String...) -> Bool {
+        let hidden = UserDefaults.standard.stringArray(forKey: "hiddenCourseNames") ?? []
+        func normalized(_ value: String) -> String {
+            value.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        let aliases = Set(hidden.map(normalized))
+        return names.allSatisfy { !aliases.contains(normalized($0)) }
     }
 }

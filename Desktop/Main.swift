@@ -21,6 +21,8 @@ struct HomeworkApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
     @AppStorage("interfaceLanguage") private var interfaceLanguage = "zh-Hans"
     @AppStorage("appearanceTheme") private var theme = "otter"
+    @AppStorage("showTimetableInMenuBar") private var showTimetableInMenuBar = false
+    @State private var widgetEditor: EditableWidgetSlot?
     @StateObject private var store: AssignmentStore
     @StateObject private var assistant: HomeworkAssistant
     @Environment(\.openWindow) private var openWindow
@@ -34,7 +36,7 @@ struct HomeworkApp: App {
                 preferences.set("otter", forKey: "appearanceTheme")
             }
             if preferences.object(forKey: "appearanceIcon") == nil {
-                preferences.set("otter", forKey: "appearanceIcon")
+                preferences.set("bookOtter", forKey: "appearanceIcon")
             }
             preferences.set(true, forKey: "creatureThemesIntroduced")
         }
@@ -55,6 +57,12 @@ struct HomeworkApp: App {
                 }
             }
             .modifier(AppearanceSurface())
+            .sheet(item: $widgetEditor) { slot in
+                VStack(alignment: .leading, spacing: 16) {
+                    WidgetContentPicker(slot: slot, store: store)
+                    Button("Done") { widgetEditor = nil }.keyboardShortcut(.defaultAction)
+                }.padding(24).frame(minWidth: 320)
+            }
             .sheet(isPresented: $store.settingsOpen) { AssignmentSettings(store: store, assistant: assistant) }
             .sheet(isPresented: $assistant.showPanel) { HomeworkAIPanel(assistant: assistant, store: store) }
             .preferredColorScheme(theme == "classic" ? nil : .light)
@@ -63,7 +71,12 @@ struct HomeworkApp: App {
             .onAppear(perform: connect)
             .onOpenURL { url in
                 guard url.scheme == "spassignments" else { return }
-                if url.host == "timetable" {
+                if url.host == "edit-widget", let number = Int(url.lastPathComponent),
+                   let slot = EditableWidgetSlot(rawValue: number) {
+                    if !store.settingsOpen { widgetEditor = slot }
+                } else if url.host == "grades" {
+                    store.page = .grades
+                } else if url.host == "timetable" {
                     store.page = .timetable
                 } else if url.host == "assignments" {
                     let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value
@@ -89,7 +102,7 @@ struct HomeworkApp: App {
                 Toggle("Floating Timetable", isOn: $store.floatingTimetable)
             }
         }
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $showTimetableInMenuBar) {
             TimetableMenu(store: store).modifier(AppearanceSurface())
                 .environment(\.locale, Locale(identifier: interfaceLanguage))
         } label: {
@@ -101,7 +114,7 @@ struct HomeworkApp: App {
     }
 
     private func connect() {
-        AppIconChoice.apply(UserDefaults.standard.string(forKey: "appearanceIcon") ?? "otter", updateFinder: false)
+        AppIconChoice.apply(UserDefaults.standard.string(forKey: "appearanceIcon") ?? "bookOtter", updateFinder: false)
         lifecycle.store = store
         let open = openWindow
         lifecycle.timetablePanel.attach(store: store) { [weak store] in

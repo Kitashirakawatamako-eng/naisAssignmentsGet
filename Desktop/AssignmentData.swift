@@ -45,7 +45,12 @@ enum AssignmentQuickFilter: String, CaseIterable, Codable, Identifiable {
     var id: Self { self }
 }
 
+enum CompletionFilter: String, Codable, CaseIterable {
+    case all = "All", unfinished = "Unfinished", finished = "Finished"
+}
+
 struct AssignmentFilters: Codable, Equatable {
+    var completion: CompletionFilter = .all
     var range: DateRange = .today
     var types: Set<TaskType> = [.homework]
     var courses: Set<String> = []
@@ -54,7 +59,7 @@ struct AssignmentFilters: Codable, Equatable {
     var deadlineView = false
     var search = ""
 
-    private enum CodingKeys: String, CodingKey { case range, types, courses, submissions, quickFilters, search, deadlineView }
+    private enum CodingKeys: String, CodingKey { case completion, range, types, courses, submissions, quickFilters, search, deadlineView }
 
     init() {}
 
@@ -65,6 +70,7 @@ struct AssignmentFilters: Codable, Equatable {
         let oldTypes: [String: TaskType] = ["作业": .homework, "待办": .pending, "成绩": .grades,
                                             "仅记录": .records, "待确认": .uncertain]
         let savedRange = try values.decodeIfPresent(String.self, forKey: .range) ?? ""
+        completion = try values.decodeIfPresent(CompletionFilter.self, forKey: .completion) ?? .all
         range = DateRange(rawValue: savedRange) ?? oldDates[savedRange] ?? .today
         if let savedTypes = try values.decodeIfPresent([String].self, forKey: .types) {
             types = Set(savedTypes.compactMap { TaskType(rawValue: $0) ?? oldTypes[$0] })
@@ -77,7 +83,7 @@ struct AssignmentFilters: Codable, Equatable {
     }
 
     var activeCount: Int {
-        (types == [.homework] ? 0 : max(types.count, 1)) + courses.count + submissions.count + quickFilters.count
+        (types == [.homework] ? 0 : max(types.count, 1)) + courses.count + submissions.count + quickFilters.count + (completion == .all ? 0 : 1)
     }
 
     var usesAllAssignedDates: Bool {
@@ -90,7 +96,8 @@ struct AssignmentFilters: Codable, Equatable {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         let dueFilters = quickFilters.intersection([.overdue, .dueToday])
         return tasks.filter { task in
-            effectiveRange.contains(task.assignedDay, relativeTo: now)
+            (completion == .all || task.pending == (completion == .unfinished))
+                && effectiveRange.contains(task.assignedDay, relativeTo: now)
                 && (types.isEmpty || types.contains { $0.includes(task) })
                 && (courses.isEmpty || courses.contains(task.course))
                 && (submissions.isEmpty || submissions.contains { $0.rawValue == task.submissionBucket })
@@ -123,7 +130,8 @@ struct Assignment: Decodable, Identifiable {
     let submission, grade, assignedDay, due: String?
     let actions: [String]
     let attachments: [Attachment]
-    let pending, translated, detailPending: Bool
+    var pending: Bool
+    let translated, detailPending: Bool
 
     var statusLabel: String {
         ["免交": "Exempt", "仅记录": "Record Only", "待确认": "Needs Review",

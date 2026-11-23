@@ -170,7 +170,10 @@ struct AssignmentWindow: View {
             .tag(task.id)
             .listRowInsets(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
             .accessibilityElement(children: .combine)
-            .contextMenu { PinMenu(task: task, store: store) }
+            .contextMenu {
+                CompletionActions(task: task, store: store)
+                PinMenu(task: task, store: store)
+            }
     }
 
     private func footer(count: Int, pending: Int) -> some View {
@@ -199,6 +202,19 @@ struct AssignmentWindow: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 22)
         .frame(height: 32)
+    }
+}
+
+private struct CompletionActions: View {
+    let task: Assignment
+    @ObservedObject var store: AssignmentStore
+    var body: some View {
+        Button(task.pending ? "Mark Finished" : "Mark Unfinished") {
+            store.setCompletion(task.pending, for: task.id)
+        }
+        if store.localCompletion(task.id) != nil {
+            Button("Use School Status") { store.setCompletion(nil, for: task.id) }
+        }
     }
 }
 
@@ -303,6 +319,12 @@ private struct TaskDetail: View {
                         Text(task.subject).font(.subheadline.weight(.semibold)).foregroundStyle(jade)
                         Spacer()
                         PinMenu(task: task, store: store)
+                    }
+                    HStack {
+                        CompletionActions(task: task, store: store)
+                        if let finished = store.localCompletion(task.id) {
+                            Text(finished ? "Finished on this Mac" : "Unfinished on this Mac").font(.caption)
+                        }
                     }
                     Text(task.title).font(.system(size: 23, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
@@ -437,6 +459,9 @@ private struct AssignmentFilterPopover: View {
                 Spacer()
                 Button("Reset") { store.resetFilters() }.buttonStyle(.link)
             }
+            Picker("Completion", selection: $store.filters.completion) {
+                ForEach(CompletionFilter.allCases, id: \.self) { Text(LocalizedStringKey($0.rawValue)).tag($0) }
+            }.pickerStyle(.segmented)
             Text("Submission Status").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             HStack(spacing: 13) {
                 ForEach(Submission.allCases) { state in
@@ -502,10 +527,16 @@ struct AssignmentSettings: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                     .disabled(store.working == "configure")
             }
+            LanguageSettings()
+            Divider()
             AppearanceSettings()
+            Divider()
+            DesktopWidgetSettings(store: store)
             Divider()
             VStack(alignment: .leading, spacing: 7) {
                 Label("Attachment Folder", systemImage: "folder").font(.headline)
+                Text("Downloaded files are organized by assignment. Changing folders keeps your existing copies in their original location.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text(store.attachmentFolder.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     .lineLimit(2).help(store.attachmentFolder.path)
                 HStack {

@@ -40,15 +40,26 @@ struct ThemeMascot: View {
 
         let result: NSImage?
         switch choice {
+        case "bookOtter":
+            result = load("BookOtter", extension: "png", in: bundle).map { source in
+                NSImage(size: NSSize(width: 1024, height: 1024), flipped: false) { canvas in
+                    NSGraphicsContext.saveGraphicsState()
+                    NSBezierPath(ovalIn: canvas.insetBy(dx: 48, dy: 48)).addClip()
+                    NSColor.white.setFill()
+                    canvas.fill()
+                    source.draw(in: canvas)
+                    NSGraphicsContext.restoreGraphicsState()
+                    return true
+                }
+            }
         case "classic":
-            result = load("ClassicIcon", extension: "icns", in: bundle)
+            result = load("ClassicIcon", extension: "icns", in: bundle).map(roundedIcon)
         case "otter", "creature":
             let otter = choice == "otter"
             let base = otter ? "Otter" : "Creature"
             guard let mascot = load(base + "TransparentIconSource", extension: "png", in: bundle)
                 ?? load(base + "TransparentIcon", extension: "icns", in: bundle) else { return nil }
-            let scene = tile ? load(otter ? "OtterBackground" : "PaleoBackground", extension: "png", in: bundle) : nil
-            result = tile ? withBackground(mascot, scene: scene, theme: otter ? .otter : .paleo) : mascot
+            result = tile ? withBackground(mascot, inset: otter ? -34 : 14) : mascot
         default:
             return image("otter", background: tile, bundle: bundle)
         }
@@ -60,23 +71,27 @@ struct ThemeMascot: View {
         bundle.url(forResource: name, withExtension: ext).flatMap(NSImage.init(contentsOf:))
     }
 
-    private static func withBackground(_ mascot: NSImage, scene: NSImage?, theme: DeskTheme) -> NSImage {
+    private static func roundedIcon(_ source: NSImage) -> NSImage {
+        NSImage(size: NSSize(width: 512, height: 512), flipped: false) { canvas in
+            let tile = canvas.insetBy(dx: 42, dy: 42)
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: tile, xRadius: 97, yRadius: 97).addClip()
+            source.draw(in: tile, from: .zero, operation: .sourceOver, fraction: 1)
+            NSGraphicsContext.restoreGraphicsState()
+            return true
+        }
+    }
+
+    private static func withBackground(_ mascot: NSImage, inset: CGFloat) -> NSImage {
         let size = NSSize(width: 512, height: 512)
         return NSImage(size: size, flipped: false) { canvas in
             let tile = canvas.insetBy(dx: 42, dy: 42)
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(roundedRect: tile, xRadius: 97, yRadius: 97).addClip()
-            (theme == .otter ? NSColor(srgbRed: 0.64, green: 0.88, blue: 0.91, alpha: 1)
-                : NSColor(srgbRed: 0.95, green: 0.89, blue: 0.74, alpha: 1)).setFill()
+            NSColor.white.setFill()
             tile.fill()
-            if let scene {
-                let square = min(scene.size.width, scene.size.height)
-                let source = NSRect(x: (scene.size.width - square) / 2, y: (scene.size.height - square) / 2,
-                                    width: square, height: square)
-                scene.draw(in: tile, from: source, operation: .sourceOver, fraction: 1)
-            }
             NSGraphicsContext.current?.imageInterpolation = .none
-            mascot.draw(in: tile.insetBy(dx: 14, dy: 14), from: .zero, operation: .sourceOver, fraction: 1)
+            mascot.draw(in: tile.insetBy(dx: inset, dy: inset), from: .zero, operation: .sourceOver, fraction: 1)
             NSGraphicsContext.restoreGraphicsState()
             return true
         }
@@ -104,11 +119,12 @@ struct AppearanceSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
             Text("App icon").font(.subheadline.weight(.medium))
             HStack(spacing: 8) {
+                iconButton("bookOtter", title: "Notebook Otter")
                 iconButton("otter", title: "Pixel Otter")
                 iconButton("creature", title: "Pixel Anomalocaris")
                 iconButton("classic", title: "Original Icon")
             }
-            if icon != "classic" {
+            if ["otter", "creature"].contains(icon) {
                 Toggle("Icon background", isOn: Binding(get: { backgroundEnabled }, set: { value in
                     backgroundEnabled = value
                     iconNotice = AppIconChoice.apply(icon) ? "" : "Could not apply the icon to Finder."

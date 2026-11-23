@@ -37,7 +37,7 @@ struct SchoolLesson: Codable, Identifiable {
 struct Timetable: Codable {
     let checkedAt: Date
     let startDay, endDay: String
-    let courses: [SchoolLesson]
+    var courses: [SchoolLesson]
 
     func covers(_ day: Date) -> Bool {
         let value = Beijing.day(day)

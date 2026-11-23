@@ -84,6 +84,20 @@ import Foundation
     static func checkGradeAnalysis() {
         let score = SchoolGrade(id: "1", course: "math", subject: "Math", title: "Grade", category: "Work",
                                 day: "2026-11-20", score: "340", total: "400", level: nil, exempt: false)
+        var preferences = GradePreferences()
+        let actual = OverallEstimate(records: [score], courses: ["math", "art"], term: "fall", preferences: preferences)
+        assert(actual.total.average == 3 && actual.total.courses == 1 && actual.eligible == 2)
+        preferences.estimateMaximum = 5
+        let key = "fall\u{1f}math"
+        let plan = [GradeSectionInput(weight: "60", score: "100"), GradeSectionInput(weight: "40", score: "75")]
+        preferences.sectionPlans = [key: plan]
+        let projected = OverallEstimate(records: [score], courses: ["math"], term: "fall", preferences: preferences, projected: true)
+        assert(projected.valid && projected.total.average == 5)
+        assert(projected.cumulative(prior: PriorGPA(average: "3", credits: "3")) == 3.5)
+        let observed = OverallEstimate(records: [score], courses: [], term: "fall", preferences: preferences)
+        assert(observed.total.average == 3.75)
+        preferences.sectionPlans = [key: Array(plan.prefix(1))]
+        assert(!OverallEstimate(records: [score], courses: [], term: "fall", preferences: preferences, projected: true).valid)
         let points = CourseGrades(records: [score], rule: GradingRule())
         assert(points.percent() == 85)
         assert(near(points.requiredScore(target: 85, addedMaximum: 100, in: ""), 85))
@@ -128,10 +142,20 @@ import Foundation
             let backdrop = AppIconChoice.image(choice, background: true, bundle: bundle)!
             let corner = alpha(of: backdrop, x: 0, y: 0)
             let tile = alpha(of: backdrop, x: 0.50, y: 0.13)
-            let samePoint = alpha(of: transparent, x: 0.50, y: 0.13)
-            assert(corner == 0 && tile >= 250 && samePoint < 15, "Invalid \(choice) alpha: \(corner), \(tile), \(samePoint)")
+            let revealsBackground = [0.15, 0.25, 0.50, 0.75, 0.85].contains { x in
+                [0.15, 0.25, 0.50, 0.75, 0.85].contains { y in
+                    alpha(of: backdrop, x: x, y: y) >= 250 && alpha(of: transparent, x: x, y: y) < 15
+                }
+            }
+            assert(corner == 0 && tile >= 250 && revealsBackground, "Invalid background for \(choice)")
+
         }
-        assert(AppIconChoice.image("classic", bundle: bundle) != nil)
+        let classic = AppIconChoice.image("classic", bundle: bundle)!
+        assert(alpha(of: classic, x: 0, y: 0) == 0)
+        assert(alpha(of: classic, x: 0.10, y: 0.10) == 0)
+        assert(alpha(of: classic, x: 0.50, y: 0.50) > 250)
+        let bundled = NSImage(contentsOf: bundle.url(forResource: "AppIcon", withExtension: "icns")!)!
+        assert(alpha(of: bundled, x: 0, y: 0) == 0, "Bundled Finder icon must have transparent corners")
         print("Passed: separate themed icon backgrounds, fully transparent corners, and original icon.")
     }
 
@@ -155,6 +179,24 @@ import Foundation
         let restored = try WidgetSnapshot.decode(from: widget.encoded())
         assert(restored.theme == "paleo" && restored.timetable?.covers(when) == true && restored.pins.first?.due == when)
         assert(URLComponents(url: pin.url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value == pin.id)
+
+        // Old snapshots omit both slot settings and GPA; they must still load after upgrading.
+        assert(restored.preferredContent == nil && restored.secondContent == nil && restored.gpa == nil)
+        var configuredSnapshot = restored
+        configuredSnapshot.preferredContent = "deadlines"
+        configuredSnapshot.secondContent = "gpa"
+        configuredSnapshot.deadlines = [pin]
+        configuredSnapshot.gpa = WidgetGPA(transcript: nil, estimate: 3.65, included: 4, eligible: 5, exampleScale: false)
+        configuredSnapshot.slots = [
+            "1": WidgetSlotAppearance(color: "blue", pins: [pin], count: 1),
+            "2": WidgetSlotAppearance(color: "lavender", pins: [], count: 0)
+        ]
+        let saved = try WidgetSnapshot.decode(from: configuredSnapshot.encoded())
+        assert(saved.slots?["1"]?.pins.first?.id == pin.id && saved.slots?["1"]?.color == "blue")
+        assert(saved.slots?["2"]?.count == 0 && saved.slots?["2"]?.color == "lavender")
+        assert(saved.preferredContent == "deadlines" && saved.secondContent == "gpa")
+        assert(saved.deadlines?.first?.id == pin.id && saved.gpa?.estimate == 3.65)
+        assert(saved.gpa?.included == 4 && saved.gpa?.eligible == 5)
 
         let files = FileManager.default
         let filenames = ["data/tasks/sample/one/notes.txt", "data/tasks/sample/two/notes.txt"]
@@ -209,6 +251,16 @@ import Foundation
                               pending: pending, translated: false, detailPending: false)
         }
         let yesterday = sample("due-today", now.addingTimeInterval(3_600))
+        var offline = yesterday
+        offline.pending = false
+        var completion = AssignmentFilters()
+        completion.range = .all
+        completion.completion = .unfinished
+        assert(completion.apply(to: [offline], now: now).isEmpty)
+        completion.completion = .finished
+        assert(completion.apply(to: [offline], now: now).first?.submissionBucket == "unsubmitted")
+        assert(HomeworkReminders.upcoming([offline], at: now).isEmpty)
+        assert(HomeworkReminders.upcoming([yesterday], at: now).count == 1)
         var filters = AssignmentFilters()
         assert(filters.effectiveRange == .today && filters.apply(to: [yesterday], now: now).isEmpty)
         filters.quickFilters = [.dueToday]

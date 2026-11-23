@@ -91,6 +91,7 @@ struct GPAWindow: View {
                     let selected = category.flatMap { groups.contains($0) ? $0 : nil } ?? groups.first ?? CourseGrades.totalGroup
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
+                            estimatePanel(course)
                             courseSummary(course, data)
                             overall(course, data: data, group: selected)
                             scenario(data, group: selected, groups: groups)
@@ -287,6 +288,81 @@ struct GPAWindow: View {
             } else {
                 Text("Enter a valid goal and complete the course rules to calculate a result.")
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func estimatePanel(_ course: String) -> some View {
+        let pref = preferences
+        let key = ruleKey(course)
+        let rows = pref.sectionPlans?[key] ?? []
+        let current = OverallEstimate(records: allRecords, courses: courses.map(\.id), term: term, preferences: pref)
+        let projected = OverallEstimate(records: allRecords, courses: courses.map(\.id), term: term, preferences: pref, projected: true)
+        let priorKey = term + "/" + String(current.maximum)
+        let prior = pref.priorTerms?[priorKey] ?? PriorGPA()
+        func save(_ rows: [GradeSectionInput]) {
+            update { $0.sectionPlans = ($0.sectionPlans ?? [:]).merging([key: rows]) { _, new in new } }
+        }
+        func field(_ id: UUID, _ path: WritableKeyPath<GradeSectionInput, String>) -> Binding<String> {
+            Binding(get: { rows.first { $0.id == id }?[keyPath: path] ?? "" }, set: { value in
+                var next = preferences.sectionPlans?[key] ?? []
+                if let i = next.firstIndex(where: { $0.id == id }) { next[i][keyPath: path] = value; save(next) }
+            })
+        }
+        func previous(_ path: WritableKeyPath<PriorGPA, String>) -> Binding<String> {
+            Binding(get: { prior[keyPath: path] }, set: { value in
+                update {
+                    var terms = $0.priorTerms ?? [:]
+                    terms[priorKey, default: PriorGPA()][keyPath: path] = value
+                    $0.priorTerms = terms
+                }
+            })
+        }
+        func display(_ value: Double?) -> String {
+            value.map { String(format: "%.2f / %d.0", $0, current.maximum) } ?? "—"
+        }
+        return GradeSection {
+            HStack {
+                Label("Overall GPA estimate", systemImage: "sum").font(.headline)
+                Spacer()
+                Picker("Display scale", selection: Binding(get: { current.maximum }, set: { value in update { $0.estimateMaximum = value } })) {
+                    Text(verbatim: "4.0").tag(4)
+                    Text(verbatim: "5.0").tag(5)
+                }.pickerStyle(.segmented).frame(width: 130)
+            }
+            LabeledContent("Semester total", value: display(current.total.average))
+            Text("\(current.total.courses) of \(current.eligible) courses included").font(.caption)
+            Text("90 / 80 / 70 / 60% earn 4 / 3 / 2 / 1 points. Below 60% earns 0. The 5.0 display multiplies these points by 1.25. Blank course credits count as 1.").font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("Cumulative GPA across semesters") {
+                HStack {
+                    input("Previous cumulative GPA", text: previous(\.average))
+                    input("Previous credits", text: previous(\.credits))
+                }
+                Text("Use your previous GPA on the selected scale and enter this semester’s actual course credits.").font(.caption)
+                LabeledContent("Cumulative estimate", value: display(current.cumulative(prior: prior)))
+            }
+            Divider()
+            DisclosureGroup("What if my section scores change?") {
+                Text("Enter expected final percentages and weights for the selected course. Weights must total 100%. Other courses keep their current grades unless you enter a plan for them.").font(.caption)
+                ForEach(rows) { row in
+                    HStack {
+                        input("Section", text: field(row.id, \.name))
+                        input("Weight (%)", text: field(row.id, \.weight))
+                        input("Expected score (%)", text: field(row.id, \.score))
+                        Button { save(rows.filter { $0.id != row.id }) } label: { Image(systemName: "minus.circle") }.accessibilityLabel("Remove section")
+                    }
+                }
+                Button("Add section") {
+                    let names = groupsForRules(course).filter { name in !rows.contains { $0.name == name } }
+                    let name = names.first ?? ""
+                    save(rows + [GradeSectionInput(name: name, weight: rule(for: course).weights[name] ?? "", score: "")])
+                }
+                if let percent = GradeSectionInput.projectedPercent(rows) {
+                    LabeledContent("Projected course grade", value: percentText(percent))
+                }
+                if !projected.valid { Text("Complete all planned scores and make each planned course’s weights total 100%.").foregroundStyle(.orange) }
+                LabeledContent("Projected semester GPA", value: display(projected.valid ? projected.total.average : nil))
+                if !prior.credits.isEmpty { LabeledContent("Projected cumulative GPA", value: display(projected.cumulative(prior: prior))) }
             }
         }
     }

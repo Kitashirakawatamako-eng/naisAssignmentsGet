@@ -5,6 +5,7 @@ import WidgetKit
 private struct WidgetEntry: TimelineEntry {
     let date: Date
     let data: WidgetSnapshot?
+    var page: WidgetPage = .timetable
 
     var timetable: Timetable? { data?.timetable }
     var hasSchedule: Bool { timetable?.covers(date) == true }
@@ -39,21 +40,38 @@ private struct WidgetEntry: TimelineEntry {
 
 private struct WidgetProvider: TimelineProvider {
     var showSchedule = true
+    var slot: Int?
 
-    func placeholder(in context: Context) -> WidgetEntry { .preview }
+    private func selectedPage(_ data: WidgetSnapshot?) -> WidgetPage {
+        guard let slot else { return showSchedule ? .timetable : .pins }
+        let preference = slot == 1 ? data?.preferredContent : data?.secondContent
+        return preference.flatMap(WidgetPage.init(rawValue:)) ?? (slot == 1 ? .deadlines : .gpa)
+    }
+
+    func placeholder(in context: Context) -> WidgetEntry {
+        let sample = WidgetEntry.preview
+        var data = sample.data
+        data?.deadlines = sample.data?.pins
+        data?.gpa = WidgetGPA(transcript: nil, estimate: 3.5, included: 4, eligible: 4, exampleScale: true)
+        return WidgetEntry(date: sample.date, data: data, page: selectedPage(data))
+    }
 
     func getSnapshot(in context: Context, completion: @escaping (WidgetEntry) -> Void) {
         let data = readData()
-        completion(context.isPreview && data == nil ? .preview : WidgetEntry(date: Date(), data: data))
+        completion(context.isPreview && data == nil ? placeholder(in: context) : WidgetEntry(date: Date(), data: data, page: selectedPage(data)))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<WidgetEntry>) -> Void) {
-        let now = Date()
         let data = readData()
-        let entry = WidgetEntry(date: now, data: data)
+        completion(timeline(data: data, page: selectedPage(data)))
+    }
+
+    func timeline(data: WidgetSnapshot?, page: WidgetPage) -> Timeline<WidgetEntry> {
+        let now = Date()
+        let showSchedule = page == .timetable || page == .nextClass
+        let entry = WidgetEntry(date: now, data: data, page: page)
         guard data != nil, !showSchedule || entry.hasSchedule else {
-            completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(15 * 60))))
-            return
+            return Timeline(entries: [entry], policy: .after(now.addingTimeInterval(15 * 60)))
         }
         let horizon = now.addingTimeInterval(24 * 60 * 60)
         var dates = Set([now])
@@ -64,18 +82,18 @@ private struct WidgetProvider: TimelineProvider {
                 }
             }
         } else {
-            for pin in data?.pins ?? [] where pin.pending {
+            for pin in (page == .deadlines ? data?.deadlines : data?.pins) ?? [] where pin.pending {
                 if let due = pin.due, due > now, due < horizon { dates.insert(due) }
             }
         }
         if let midnight = Beijing.calendar.dateInterval(of: .day, for: now)?.end {
             dates.insert(midnight)
         }
-        let entries = dates.sorted().map { WidgetEntry(date: $0, data: data) }
-        completion(Timeline(entries: entries, policy: .after(horizon)))
+        let entries = dates.sorted().map { WidgetEntry(date: $0, data: data, page: page) }
+        return Timeline(entries: entries, policy: .after(horizon))
     }
 
-    private func readData() -> WidgetSnapshot? {
+    func readData() -> WidgetSnapshot? {
         guard let home = getpwuid(getuid())?.pointee.pw_dir else { return nil }
         let root = URL(fileURLWithPath: String(cString: home), isDirectory: true)
             .appendingPathComponent("Library/Application Support/作业速览")
@@ -94,25 +112,33 @@ private struct WidgetProvider: TimelineProvider {
     }
 }
 
-private enum WidgetPage {
-    case timetable, nextClass, pins
+private enum WidgetPage: String {
+    case timetable, nextClass, pins, deadlines, gpa
 }
 
 private struct AssignmentWidgetView: View {
     let entry: WidgetEntry
     let page: WidgetPage
+    var editableSlot: Int?
     @Environment(\.widgetFamily) private var family
     @Environment(\.widgetRenderingMode) private var renderingMode
 
+    private var settings: WidgetSlotAppearance? {
+        editableSlot.flatMap { entry.data?.slots?[String($0)] }
+    }
+    private var visiblePins: [WidgetAssignment] { settings?.pins ?? entry.data?.pins ?? [] }
+    private var colorChoice: WidgetColor { WidgetColor(rawValue: settings?.color ?? "") ?? .theme }
+    private var palette: (surface: Color, card: Color, accent: Color) { colorChoice.palette(theme: entry.theme) }
+    private var adaptive: Bool { colorChoice == .theme && entry.theme == .classic }
     private var compact: Bool { family == .systemSmall }
     private var fullColor: Bool { renderingMode == .fullColor }
     private var ink: Color {
-        fullColor && entry.theme != .classic ? Color(red: 0.10, green: 0.19, blue: 0.20) : .primary
+        fullColor && !adaptive ? Color(red: 0.10, green: 0.19, blue: 0.20) : .primary
     }
     private var muted: Color {
-        fullColor && entry.theme != .classic ? Color(red: 0.30, green: 0.38, blue: 0.40) : .secondary
+        fullColor && !adaptive ? Color(red: 0.30, green: 0.38, blue: 0.40) : .secondary
     }
-    private var accent: Color { fullColor ? entry.theme.primary : .primary }
+    private var accent: Color { fullColor ? palette.accent : .primary }
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 6 : 9) {
@@ -120,6 +146,11 @@ private struct AssignmentWidgetView: View {
                 Text(title).font(.system(size: compact ? 12 : 14, weight: .semibold))
                     .foregroundStyle(accent).widgetAccentable()
                 Spacer(minLength: 3)
+                if let editableSlot, !compact {
+                    Link(destination: URL(string: "spassignments://edit-widget/\(editableSlot)")!) {
+                        Label("Edit", systemImage: "pencil").font(.caption)
+                    }
+                }
                 if page == .timetable {
                     Text(Beijing.shortDay(entry.date, chinese: entry.chinese))
                         .font(.system(size: 10, weight: .medium)).foregroundStyle(muted)
@@ -131,15 +162,36 @@ private struct AssignmentWidgetView: View {
             case .timetable: timetable
             case .nextClass: nextClass
             case .pins: pins
+            case .deadlines:
+                if upcoming.isEmpty {
+                    empty("No Upcoming Deadlines", hint: "Open assignments to check your homework.")
+                } else {
+                    ForEach(upcoming.prefix(compact ? 2 : 3)) { item in
+                        if compact { assignment(item) }
+                        else { Link(destination: item.url) { assignment(item) }.buttonStyle(.plain) }
+                    }
+                }
+            case .gpa:
+                if let summary = entry.data?.gpa, let estimate = summary.estimate {
+                    Text(verbatim: String(format: "%.2f / %d.0", estimate, summary.maximum ?? 4))
+                        .font(.title.bold()).minimumScaleFactor(0.7).privacySensitive()
+                    Text("Estimated semester GPA").font(.caption)
+                    Text("\(summary.included) of \(summary.eligible) courses included").font(.caption2)
+                } else if let value = entry.data?.gpa?.transcript, !value.isEmpty {
+                    Text(value).font(.largeTitle.bold()).privacySensitive()
+                    Text("From your transcript").font(.caption)
+                } else {
+                    empty("GPA Unavailable", hint: "Open Grades and sync semester scores.")
+                }
             }
         }
         .foregroundStyle(ink)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(compact ? 12 : 14)
         .widgetURL(openURL)
-        .containerBackground(for: .widget) { entry.theme.surface }
+        .containerBackground(for: .widget) { palette.surface }
         .environment(\.locale, Locale(identifier: entry.language))
-        .environment(\.colorScheme, entry.theme == .classic ? colorScheme : .light)
+        .environment(\.colorScheme, adaptive ? colorScheme : .light)
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -149,12 +201,20 @@ private struct AssignmentWidgetView: View {
         case .timetable: "Timetable"
         case .nextClass: "Next Class"
         case .pins: "Pinned Assignments"
+        case .deadlines: "Homework Deadlines"
+        case .gpa: "Semester GPA"
         }
     }
 
+    private var upcoming: [WidgetAssignment] {
+        (entry.data?.deadlines ?? []).filter { ($0.due ?? .distantPast) > entry.date }
+    }
+
     private var openURL: URL {
+        if page == .gpa { return WidgetSnapshot.gradesURL }
+        if page == .deadlines { return compact ? upcoming.first?.url ?? WidgetSnapshot.assignmentURL : WidgetSnapshot.assignmentURL }
         guard page == .pins else { return WidgetSnapshot.timetableURL }
-        return compact ? (entry.data?.pins.first?.url ?? WidgetSnapshot.assignmentURL) : WidgetSnapshot.assignmentURL
+        return compact ? (visiblePins.first?.url ?? WidgetSnapshot.assignmentURL) : WidgetSnapshot.assignmentURL
     }
 
     @ViewBuilder private var timetable: some View {
@@ -194,7 +254,7 @@ private struct AssignmentWidgetView: View {
     }
 
     @ViewBuilder private var pins: some View {
-        let pins = entry.data?.pins ?? []
+        let pins = visiblePins
         if pins.isEmpty {
             empty("No Pinned Assignments", hint: "Pin an assignment in the app to see it here.")
         } else {
@@ -206,7 +266,7 @@ private struct AssignmentWidgetView: View {
                         .buttonStyle(.plain)
                 }
             }
-            let remaining = (entry.data?.pinCount ?? 0) - (compact ? 2 : 3)
+            let remaining = (settings?.count ?? entry.data?.pinCount ?? 0) - (compact ? 2 : 3)
             if remaining > 0 {
                 Text("+\(remaining) more").font(.system(size: 10, weight: .medium)).foregroundStyle(muted)
             }
@@ -229,7 +289,7 @@ private struct AssignmentWidgetView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(fullColor ? entry.theme.background : .primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+        .background(fullColor ? palette.card : .primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
         .accessibilityElement(children: .combine)
     }
 
@@ -252,7 +312,7 @@ private struct AssignmentWidgetView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: compact ? nil : .infinity, alignment: .topLeading)
         .padding(.horizontal, 8).padding(.vertical, compact ? 5 : 10)
-        .background(fullColor ? entry.theme.background : .primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+        .background(fullColor ? palette.card : .primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
         .accessibilityElement(children: .combine)
     }
 
@@ -302,9 +362,29 @@ struct PinnedAssignmentsWidget: Widget {
     }
 }
 
+private func overviewConfiguration(slot: Int) -> some WidgetConfiguration {
+        StaticConfiguration(kind: "OverviewSlot" + String(slot), provider: WidgetProvider(slot: slot)) { entry in
+            AssignmentWidgetView(entry: entry, page: entry.page, editableSlot: slot)
+        }
+        .configurationDisplayName(slot == 1 ? "My Overview" : "My Second Overview")
+        .description("Choose the content for this widget in the app’s Desktop Widgets settings.")
+        .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
+}
+
+struct FirstOverviewWidget: Widget {
+    var body: some WidgetConfiguration { overviewConfiguration(slot: 1) }
+}
+
+struct SecondOverviewWidget: Widget {
+    var body: some WidgetConfiguration { overviewConfiguration(slot: 2) }
+}
+
 @main
 struct AssignmentWidgets: WidgetBundle {
     var body: some Widget {
+        FirstOverviewWidget()
+        SecondOverviewWidget()
         DesktopTimetableWidget()
         NextClassWidget()
         PinnedAssignmentsWidget()

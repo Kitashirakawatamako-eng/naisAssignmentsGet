@@ -54,3 +54,34 @@ enum DeskTheme: String, CaseIterable, Identifiable {
         }
     }
 }
+
+enum WidgetColor: String, CaseIterable {
+    case theme, mint, blue, lavender, peach, rose
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .theme: "App theme"
+        case .mint: "Mint"
+        case .blue: "Sky blue"
+        case .lavender: "Lavender"
+        case .peach: "Peach"
+        case .rose: "Rose"
+        }
+    }
+
+    func palette(theme: DeskTheme) -> (surface: Color, card: Color, accent: Color) {
+        func rgb(_ hex: Int) -> Color {
+            Color(red: Double(hex >> 16) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
+        }
+        let colors: (Int, Int, Int)
+        switch self {
+        case .theme: return (theme.surface, theme.background, theme.primary)
+        case .mint: colors = (0xE4F7ED, 0xC9EEDC, 0x126044)
+        case .blue: colors = (0xE6F3FF, 0xCFE7FC, 0x195687)
+        case .lavender: colors = (0xF1EBFE, 0xE4DAFA, 0x604193)
+        case .peach: colors = (0xFFF1E3, 0xFFE2C7, 0x874922)
+        case .rose: colors = (0xFDEDF2, 0xFADBE6, 0x8A3858)
+        }
+        return (rgb(colors.0), rgb(colors.1), rgb(colors.2))
+    }
+}

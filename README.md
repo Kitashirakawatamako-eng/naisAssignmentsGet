@@ -28,6 +28,10 @@
 
 在 macOS 桌面右击并选择 **编辑小组件**，搜索 **作业速览**，可添加置顶作业、课表和下一节课。置顶作业沿用应用里的全局和筛选内置顶规则。小组件随应用主题切换，macOS 启用单色或系统着色时按系统样式显示。
 
+新增的「我的速览」和「第二个速览」可分别选择作业截止时间、学期 GPA、课表、下一节或置顶作业。中号组件点「编辑」即可切换，小号组件在 **设置 → 桌面小组件** 切换。同名组件共享选择。两个速览可单独选择跟随主题、薄荷绿、天蓝、淡紫、蜜桃或玫瑰色。选择「置顶作业」后，还可指定全部可见置顶、仅全局、仅当前筛选或单项作业。截止时间只列出未完成且尚未到期的作业，置顶优先，同组按截止时间排序。GPA 优先显示本学期已录入的成绩单值，估算值会标注纳入课程数。
+
+在 **设置 → 桌面小组件 → 预览小组件** 可先查看当前数据和主题，也可以请求刷新。实际桌面刷新时间由 macOS 决定。设计稿、功能入口及本轮检查步骤见 [设计与验收说明](DESIGN_REVIEW.md)。
+
 在 **成绩** 页按科目和类别查看逐项分数及类别累计分，计算保分、提分和多次作业情景。**同步学期成绩** 会查询当前学期的学校列表，只保存已发布成绩所需的字段，不下载历史作业正文和附件。同步失败时保留已有成绩并说明原因。学期 GPA 按应用内填写的换算表、学分和加权设置估算。计算方式见 [GPA 分析方案](GPA_PLAN.md)。
 
 学校网页可以正常打开时，点 **成绩 → 同步学期成绩**。若有问题，可从 **成绩工具 → 复制成绩同步诊断** 复制版本、日期、数量和错误信息。
@@ -73,4 +77,4 @@ Open **Settings → Appearance** to choose your theme and icon. A theme selects 
 
 **Settings → Appearance** now includes **Little Otter** (cream surfaces, clear-water blue/teal accents, a floating pixel otter with a gently curved tail) and **Fossil Cove** (fossil ivory, moss green, sandstone accents, the preserved monochrome curled Anomalocaris). Both use flat colors, transparent mascot icons, and matching header mascots. Ocean White and Classic Jade remain available. Selecting a theme selects its matching icon; the icon can also be chosen separately. Little Otter is the default. The app remembers your theme and icon choices.
 
-Little Otter and Fossil Cove include matching scenery inside their rounded app icons. Toggle **Icon background** in Appearance to choose the scenery tile or transparent mascot. Page backgrounds remain solid colors. All artwork is bundled locally.
+Little Otter and Fossil Cove include solid white backgrounds inside their rounded pixel icons. Toggle **Icon background** in Appearance to choose the white tile or transparent mascot. Page backgrounds remain solid colors. All artwork is bundled locally.
