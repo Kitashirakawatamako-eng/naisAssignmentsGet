@@ -163,6 +163,24 @@ import Foundation
         assert(school.scale?.points(at: 89.94) == 3.3 && school.scale?.points(at: 89.96) == 4)
         assert(school.scale?.minimumPercent(for: 4) == 90)
 
+        let work = PlannedGrade(course: "c", category: "Work", maximum: "10", expected: "10")
+        let secondWork = PlannedGrade(course: "c", category: "Work", maximum: "100", expected: "95")
+        let exam = PlannedGrade(course: "c", category: "Exam", maximum: "20", expected: "20")
+        let single = reconciled.impact(of: [work])!
+        assert(near(single.categories[0].before, 86) && near(single.categories[0].after, 88.8))
+        assert(near(single.coursePercent, 89.88))
+        assert(reconciled.impact(of: [work, exam]) == nil)
+        let combined = reconciled.impact(of: [work, secondWork, exam], assumedCounts: ["Exam": 2])!
+        assert(combined.categories.map(\.id) == ["Exam", "Work"])
+        assert(near(combined.categories[0].after, 94.33333333333333))
+        assert(near(combined.categories[1].after, 89.83333333333333))
+        assert(near(combined.coursePercent, 91.63333333333333))
+        assert(school.scale?.points(at: combined.coursePercent) == 4)
+        let missing = PlannedGrade(course: "c", category: "Work", maximum: "10", expected: "0")
+        assert(near(reconciled.impact(of: [missing])?.categories.first?.after, 68.8))
+        let invalid = PlannedGrade(course: "c", category: "Manual label", maximum: "10", expected: "9")
+        assert(reconciled.impact(of: [invalid]) == nil)
+
         let scale = GPAScale("90=4.0\n85=3.5\n80=3.0\n0=0")!
         assert(scale.points(at: 89.999) == 3.5 && scale.points(at: 90) == 4)
         assert(GPAScale("0=4\n90=3") == nil)

@@ -120,6 +120,124 @@ struct TranscriptGPAEditor: View {
     }
 }
 
+struct CourseTaskImpactEditor: View {
+    let courseID: String
+    let school: SchoolDynamicCourse?
+    let grades: CourseGrades?
+    @Binding var items: [PlannedGrade]
+    @State private var assumedCounts: [String: String] = [:]
+
+    init(courseID: String, school: SchoolDynamicCourse?, grades: CourseGrades?, items: Binding<[PlannedGrade]>) {
+        self.courseID = courseID
+        self.school = school
+        self.grades = grades
+        _items = items
+    }
+
+    private var categories: [String] { grades?.scenarioCategories ?? [] }
+    private var missingCounts: [String] {
+        Set(items.map(\.category)).sorted().filter { grades?.needsItemCount(in: $0) == true }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Task impact on this course", systemImage: "arrow.triangle.branch").font(.headline)
+            if let grades, !categories.isEmpty {
+                ForEach($items) { $item in
+                    HStack(alignment: .bottom) {
+                        Picker("School category", selection: $item.category) {
+                            ForEach(categories, id: \.self) { Text(verbatim: $0).tag($0) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        field("Expected Score", text: $item.expected)
+                        field("Max Points Each", text: $item.maximum)
+                        Button {
+                            let id = item.id
+                            items.removeAll { $0.id == id }
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }.buttonStyle(.borderless).accessibilityLabel("Remove Item")
+                    }
+                }
+                Button("Add task to forecast") {
+                    if let category = items.last?.category, categories.contains(category) {
+                        items.append(PlannedGrade(course: courseID, category: category, expected: ""))
+                    } else if let category = categories.first(where: { !grades.needsItemCount(in: $0) }) ?? categories.first {
+                        items.append(PlannedGrade(course: courseID, category: category, expected: ""))
+                    }
+                }.disabled(items.count >= 200)
+                if items.isEmpty {
+                    Text("Add one or more tasks to see how their scores affect this course.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    results(grades)
+                }
+            } else {
+                Text("Course forecasting requires grades and category weights that reproduce the school total.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private func results(_ grades: CourseGrades) -> some View {
+        if !missingCounts.isEmpty {
+            Text("SchoolPal provides these category grades without item counts. Enter known counts or use assumptions for this forecast.")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(missingCounts, id: \.self) { category in
+                HStack {
+                    Text(verbatim: category)
+                    Spacer()
+                    TextField("Existing item count", text: Binding(
+                        get: { assumedCounts[category, default: ""] },
+                        set: { assumedCounts[category] = $0 }
+                    )).frame(maxWidth: 135)
+                }
+            }
+        }
+        let counts = assumedCounts.compactMapValues { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        if let result = grades.impact(of: items, assumedCounts: counts) {
+            Divider()
+            ForEach(result.categories) { row in
+                LabeledContent {
+                    Text(change(from: row.before, to: row.after)).monospacedDigit()
+                } label: {
+                    Text("\(row.id) · weight \(percent(row.weight))")
+                }
+            }
+            Divider()
+            let total = roundedCoursePercent(result.coursePercent)
+            LabeledContent("Course grade", value: change(from: school?.percent ?? grades.percent(), to: total))
+                .fontWeight(.semibold)
+            if let points = school?.scale?.points(at: total) {
+                LabeledContent("Course GPA points", value: "\(school?.points.map(gpa) ?? "—") → \(gpa(points))")
+                    .fontWeight(.semibold)
+            } else {
+                Text("The school GPA scale is unavailable for this course.").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Each task contributes its own percentage. Categories use SchoolPal weights. Existing item counts may be estimated.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("Enter a score from zero to the maximum for each task and fill in any required item counts.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func field(_ title: LocalizedStringKey, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            TextField(title, text: text).labelsHidden().monospacedDigit()
+        }.frame(width: 110)
+    }
+
+    private func change(from before: Double?, to after: Double) -> String {
+        "\(before.map(percent) ?? "—") → \(percent(after))"
+    }
+
+    private func roundedCoursePercent(_ value: Double) -> Double { (value * 100).rounded() / 100 }
+    private func percent(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(0...2))) + "%" }
+    private func gpa(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(2))) }
+}
+
 struct GradeScenarioEditor: View {
     struct Course: Identifiable {
         let id, name: String

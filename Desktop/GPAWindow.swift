@@ -128,10 +128,13 @@ struct GPAWindow: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             courseSummary(course, data)
-                            DisclosureGroup("What-if calculations") {
-                                estimatePanel(course)
-                                overall(course, data: data, group: selected)
+                            taskImpact(course)
+                            DisclosureGroup("Reverse-calculate a course goal") {
                                 scenario(data, group: selected, groups: groups)
+                            }
+                            DisclosureGroup("Semester and cumulative GPA estimates") {
+                                overall(course, data: data, group: selected)
+                                estimatePanel(course)
                             }
                             scores(course, data: data)
                         }
@@ -205,6 +208,25 @@ struct GPAWindow: View {
         panel.prompt = String(localized: "Import")
         panel.begin { response in
             if response == .OK, let folder = panel.url { store.importGradeDump(folder) }
+        }
+    }
+
+    private func taskImpact(_ course: String) -> some View {
+        let key = ruleKey(course)
+        let school = schoolCourseByID[course]
+        let data = school.flatMap { CourseGrades(school: $0, rule: rule(for: course)) }
+        let rows = Binding<[PlannedGrade]>(
+            get: { preferences.courseScenarios?[key] ?? [] },
+            set: { items in
+                update { pref in
+                    var drafts = pref.courseScenarios ?? [:]
+                    drafts[key] = items.isEmpty ? nil : items
+                    pref.courseScenarios = drafts
+                }
+            }
+        )
+        return GradeSection {
+            CourseTaskImpactEditor(courseID: course, school: school, grades: data, items: rows).id(key)
         }
     }
 
@@ -442,7 +464,7 @@ struct GPAWindow: View {
                 LabeledContent("Cumulative estimate", value: display(current.cumulative(prior: prior)))
             }
             Divider()
-            DisclosureGroup("What if my section scores change?") {
+            DisclosureGroup("Manually substitute final category grades") {
                 Text("Enter expected final percentages and weights for the selected course. Weights must total 100%. Other courses keep their current grades unless you enter a plan for them.").font(.caption)
                 ForEach(rows) { row in
                     HStack {
