@@ -8,7 +8,7 @@ import time
 import school_tasks as school
 from school_timetable import REFRESH_SECONDS, TIMETABLE_FILE, load_timetable, read_timetable, week_start
 from task_report import SUBJECT_NAMES, display_status, pending, submission_bucket, task_summary
-from task_records import flag, published_grade
+from task_records import flag, number, published_grade
 
 GRADE_FILE = "data/semester-grades.json"
 GRADE_STATUS_FILE = "data/semester-grades-status.json"
@@ -42,9 +42,18 @@ def semester_grades(client, now):
                         "day": day.date().isoformat() if day else None,
                         "category": row.get("typeName") or row.get("typeEName") or "",
                         "exempt": flag(row.get("isExempt")) or row.get("finishState") in (6, "6"), **grade})
+    summary = client.get("/api/DynamicScore/GetStuSemesterDynamicScore", semesterId=semester["id"])
+    published = summary["studentSemesterDynamicScoreBasicDtos"]
+    course_scores = []
+    for row in published:
+        subject = row.get("subjectName") or row.get("subjectEName")
+        score = number(row.get("subjectScore")) if row.get("scoreType") == 1 else row.get("levelString")
+        if subject and score is not None:
+            course_scores.append({"course": subject, "subject": row.get("subjectEName") or subject, "value": str(score)})
+    gpa = number(client.get("/api/DynamicScore/GetGpa", semesterId=semester["id"])) if published else None
     return {"semester_id": str(semester["id"]), "start_day": start.date().isoformat(),
             "end_day": end.date().isoformat(), "checked_at": now.isoformat(), "records": records,
-            "source_published_count": len(records)}
+            "source_published_count": len(records), "school_gpa": gpa, "school_scores": course_scores}
 
 
 def grade_snapshot(root, state, subjects):
@@ -100,6 +109,7 @@ def grade_snapshot(root, state, subjects):
     return {"semester_id": imported.get("semester_id") or (str(local_semester) if local_semester is not None else None),
             "start_day": lower, "end_day": upper, "checked_at": imported.get("checked_at"),
             "last_attempt_at": status.get("attempted_at"), "sync_issue": status.get("error"),
+            "school_gpa": imported.get("school_gpa"), "school_scores": imported.get("school_scores", []),
             "source_published_count": imported.get("source_published_count"),
             "records": sorted(records, key=lambda x: (x.get("day") or "", x["id"]), reverse=True)}
 

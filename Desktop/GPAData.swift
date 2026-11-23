@@ -9,10 +9,16 @@ struct SchoolGrade: Codable, Identifiable, Equatable {
     var points: GradePoints? { GradePoints(earned: score, possible: total) }
 }
 
+struct PublishedCourseScore: Codable {
+    let course, subject, value: String
+}
+
 struct SemesterGradeBook: Decodable {
     let semesterId, startDay, endDay, checkedAt: String?
     let lastAttemptAt, syncIssue: String?
     let sourcePublishedCount: Int?
+    var schoolGpa: String?
+    var schoolScores: [PublishedCourseScore]?
     var records: [SchoolGrade]
 }
 

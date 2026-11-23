@@ -30,6 +30,10 @@ class FakeClient:
     def get(self, path, **params):
         if path.endswith("GetSchoolSemesters"):
             return [{"id": "s1", "isNow": True, "startDate": "2026-09-01", "endDate": "2027-01-31"}]
+        if path.endswith("GetGpa"):
+            return 3.89
+        if path.endswith("GetStuSemesterDynamicScore"):
+            return {"studentSemesterDynamicScoreBasicDtos": [{"subjectName": "Math", "scoreType": 1, "subjectScore": 0}]}
         if path.endswith("GetList"):
             size = params["pageSize"]
             start = (params["pageIndex"] - 1) * size
@@ -57,6 +61,8 @@ class SyncTests(unittest.TestCase):
             {"id": "e", "name": "Out of term", "subjectName": "Math", "beginTime": "2026-08-01", **grade},
         ])
         snapshot = desktop_bridge.semester_grades(client, NOW)
+        self.assertEqual(snapshot["school_gpa"], "3.89")
+        self.assertEqual(snapshot["school_scores"][0]["value"], "0")
         self.assertEqual(snapshot["start_day"], "2026-09-01")
         self.assertEqual([(r["id"], r.get("score"), r.get("level")) for r in snapshot["records"]],
                          [("a", "0", None), ("c", None, "A"), ("d", None, None)])

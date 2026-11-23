@@ -534,12 +534,7 @@ final class AssignmentStore: ObservableObject {
     }
 
     private func widgetGPA() -> WidgetGPA {
-        let pref = defaults.data(forKey: "gradePreferences").flatMap { try? JSONDecoder().decode(GradePreferences.self, from: $0) } ?? GradePreferences()
-        let term = snapshot.gradeBook?.semesterId ?? ""
-        let records = GradeCSV.merged(school: snapshot.gradeBook?.records ?? [], imported: importedGrades.terms[term] ?? [])
-        let estimate = OverallEstimate(records: records, courses: courses.map(\.id), term: term, preferences: pref)
-        return WidgetGPA(transcript: pref.reported?[term]?.semester, estimate: estimate.total.average,
-                         included: estimate.total.courses, eligible: estimate.eligible, maximum: estimate.maximum, exampleScale: true)
+        WidgetGPA(schoolValue: snapshot.gradeBook?.schoolGpa)
     }
 
     private func showError(_ text: String, detail: String?) {
@@ -662,6 +657,7 @@ final class AssignmentStore: ObservableObject {
             schoolTasks = data.tasks.filter { CourseVisibility.includes($0.course, $0.subject) }
             var resolved = data
             resolved.timetable?.courses.removeAll { !CourseVisibility.includes($0.title) }
+            resolved.gradeBook?.schoolScores?.removeAll { !CourseVisibility.includes($0.course, $0.subject) }
             resolved.gradeBook?.records.removeAll { !CourseVisibility.includes($0.course, $0.subject) }
             resolved.tasks = resolvedTasks()
             snapshot = resolved

@@ -192,7 +192,7 @@ import Foundation
         configuredSnapshot.preferredContent = "deadlines"
         configuredSnapshot.secondContent = "gpa"
         configuredSnapshot.deadlines = [pin]
-        configuredSnapshot.gpa = WidgetGPA(transcript: nil, estimate: 3.65, included: 4, eligible: 5, exampleScale: false)
+        configuredSnapshot.gpa = WidgetGPA(schoolValue: "3.65")
         configuredSnapshot.slots = [
             "1": WidgetSlotAppearance(color: "blue", pins: [pin], count: 1),
             "2": WidgetSlotAppearance(color: "lavender", pins: [], count: 0)
@@ -201,8 +201,7 @@ import Foundation
         assert(saved.slots?["1"]?.pins.first?.id == pin.id && saved.slots?["1"]?.color == "blue")
         assert(saved.slots?["2"]?.count == 0 && saved.slots?["2"]?.color == "lavender")
         assert(saved.preferredContent == "deadlines" && saved.secondContent == "gpa")
-        assert(saved.deadlines?.first?.id == pin.id && saved.gpa?.estimate == 3.65)
-        assert(saved.gpa?.included == 4 && saved.gpa?.eligible == 5)
+        assert(saved.deadlines?.first?.id == pin.id && saved.gpa?.schoolValue == "3.65")
 
         let files = FileManager.default
         let filenames = ["data/tasks/sample/one/notes.txt", "data/tasks/sample/two/notes.txt"]

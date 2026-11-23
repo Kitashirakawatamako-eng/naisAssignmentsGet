@@ -34,6 +34,7 @@ struct GPAWindow: View {
 
     private var courses: [(id: String, subject: String)] {
         var names = offline ? [:] : Dictionary(uniqueKeysWithValues: store.courses.map { ($0.id, $0.label) })
+        for grade in (offline ? [] : book?.schoolScores ?? []) where names[grade.course] == nil { names[grade.course] = grade.subject }
         for grade in allRecords where names[grade.course] == nil { names[grade.course] = grade.subject }
         return names.map { (id: $0.key, subject: $0.value) }
             .sorted { $0.subject.localizedStandardCompare($1.subject) == .orderedAscending }
@@ -91,10 +92,12 @@ struct GPAWindow: View {
                     let selected = category.flatMap { groups.contains($0) ? $0 : nil } ?? groups.first ?? CourseGrades.totalGroup
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
-                            estimatePanel(course)
                             courseSummary(course, data)
-                            overall(course, data: data, group: selected)
-                            scenario(data, group: selected, groups: groups)
+                            DisclosureGroup("What-if calculations") {
+                                estimatePanel(course)
+                                overall(course, data: data, group: selected)
+                                scenario(data, group: selected, groups: groups)
+                            }
                             scores(course, data: data)
                         }
                         .padding(18)
@@ -160,11 +163,10 @@ struct GPAWindow: View {
         List(selection: $selectedCourse) {
             Section("Subjects") {
                 ForEach(courses, id: \.id) { course in
-                    let data = grades(for: course.id)
                     HStack(spacing: 5) {
                         Text(course.subject).lineLimit(1)
                         Spacer(minLength: 4)
-                        Text(data.percent().map(percentText) ?? "—").monospacedDigit().foregroundStyle(.secondary)
+                        Text(verbatim: (offline ? nil : book?.schoolScores?.first { $0.course == course.id }?.value) ?? "—").monospacedDigit().foregroundStyle(.secondary)
                     }
                     .tag(course.id)
                 }
@@ -180,15 +182,15 @@ struct GPAWindow: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(courses.first { $0.id == course }?.subject ?? course).font(.title3.weight(.semibold))
-                    Text(data.percent().map(percentText) ?? "—")
+                    Text(verbatim: (offline ? nil : book?.schoolScores?.first { $0.course == course }?.value) ?? "—")
                         .font(.system(size: 39, weight: .semibold, design: .rounded)).monospacedDigit()
-                    Text(data.rule.weighted ? "Category-weighted percentage" : "Total-points percentage")
+                    Text("SchoolPal course grade")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Course Rules…") { ruleOpen = true }
             }
-            if let percent = data.percent() { ProgressView(value: min(percent, 100), total: 100) }
+            if !offline { LabeledContent("SchoolPal GPA", value: book?.schoolGpa ?? "—") }
             Text("\(data.scored) scored · \(data.unscored) incomplete · \(data.omitted) excluded")
                 .font(.caption).foregroundStyle(.secondary)
             coverage

@@ -425,3 +425,6 @@
 "Unweighted 4.0" = "未加权 4.0";
 "Weighted 5.0" = "加权 5.0";
 "90 / 80 / 70 / 60% earn 4 / 3 / 2 / 1 points. Weighted GPA adds 1 for AP or 0.5 for Honors on passing grades, up to 5. Change bonuses in Course Credits. Blank credits count as 1." = "90、80、70、60 分分别计 4、3、2、1 点。及格的 AP 课程加 1 点，荣誉课程加 0.5 点，上限 5 点。可在课程学分中调整加分，留空的学分按 1 计算。";
+"SchoolPal GPA" = "校宝绩点";
+"SchoolPal course grade" = "校宝课程总评";
+"What-if calculations" = "成绩试算";

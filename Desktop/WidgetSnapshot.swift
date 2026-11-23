@@ -46,12 +46,7 @@ struct WidgetSnapshot: Codable {
 }
 
 struct WidgetGPA: Codable {
-    var transcript: String?
-    var estimate: Double?
-    var included: Int
-    var eligible: Int
-    var maximum: Int?
-    var exampleScale: Bool
+    var schoolValue: String?
 }
 
 struct WidgetSlotAppearance: Codable {

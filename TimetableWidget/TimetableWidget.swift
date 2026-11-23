@@ -52,7 +52,7 @@ private struct WidgetProvider: TimelineProvider {
         let sample = WidgetEntry.preview
         var data = sample.data
         data?.deadlines = sample.data?.pins
-        data?.gpa = WidgetGPA(transcript: nil, estimate: 3.5, included: 4, eligible: 4, exampleScale: true)
+        data?.gpa = WidgetGPA(schoolValue: "3.50")
         return WidgetEntry(date: sample.date, data: data, page: selectedPage(data))
     }
 
@@ -172,14 +172,9 @@ private struct AssignmentWidgetView: View {
                     }
                 }
             case .gpa:
-                if let summary = entry.data?.gpa, let estimate = summary.estimate {
-                    Text(verbatim: String(format: "%.2f / %d.0", estimate, summary.maximum ?? 4))
-                        .font(.title.bold()).minimumScaleFactor(0.7).privacySensitive()
-                    Text(summary.maximum == 5 ? "Weighted GPA estimate" : "Unweighted GPA estimate").font(.caption)
-                    Text("\(summary.included) of \(summary.eligible) courses included").font(.caption2)
-                } else if let value = entry.data?.gpa?.transcript, !value.isEmpty {
-                    Text(value).font(.largeTitle.bold()).privacySensitive()
-                    Text("From your transcript").font(.caption)
+                if let value = entry.data?.gpa?.schoolValue {
+                    Text(verbatim: value).font(.largeTitle.bold()).privacySensitive()
+                    Text("SchoolPal GPA").font(.caption)
                 } else {
                     empty("GPA Unavailable", hint: "Open Grades and sync semester scores.")
                 }
