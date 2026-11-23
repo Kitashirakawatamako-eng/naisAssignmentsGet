@@ -126,6 +126,43 @@ import Foundation
         weighted.weights["Quiz"] = "35"
         assert(CourseGrades(records: [score], rule: weighted).percent() == nil)
 
+        weighted.weights = ["Work": "20", "Quiz": "15", "Project": "20", "Exam": "30", "Participation": "15"]
+        weighted.pastPoints = [
+            "Work": GradePoints(earned: 96, possible: 100),
+            "Quiz": GradePoints(earned: 100, possible: 100),
+            "Exam": GradePoints(earned: 98, possible: 100),
+            "Participation": GradePoints(earned: 100, possible: 100)
+        ]
+        assert(CourseGrades(records: [], rule: weighted).percent() == nil)
+        weighted.ignoreUngradedCategories = true
+        let missingProject = CourseGrades(records: [], rule: weighted)
+        assert(near(missingProject.percent(), 98.25))
+        assert(near(missingProject.percent(additional: GradePoints(earned: 90, possible: 100), to: "Project"), 96.6))
+        assert(near(missingProject.requiredScore(target: 97, addedMaximum: 100, in: "Project"), 92))
+        assert(near(missingProject.requiredScore(target: 98.75, addedMaximum: 100, in: "Work"), 100))
+        assert(missingProject.minimumCount(target: 98.75, maximum: 100, expected: 100, in: "Work") == 1)
+        weighted.pastPoints["Project"] = GradePoints(earned: 0, possible: 100)
+        assert(near(CourseGrades(records: [], rule: weighted).percent(), 78.6))
+
+        let schoolJSON = """
+        {"id":"c","name":"Synthetic","englishName":"","className":"","percent":88.2,"points":3.3,
+         "ranges":[{"minimum":87,"maximum":89.9,"includesMinimum":true,"includesMaximum":true,"level":"B+","points":3.3},
+                   {"minimum":90,"maximum":100,"includesMinimum":true,"includesMaximum":true,"level":"A","points":4}],
+         "categories":[{"name":"Work","englishName":"","weight":60,"score":86,"children":[],"estimatedCount":4},
+                       {"name":"Exam","englishName":"","weight":40,"score":91.5,"children":[]}]}
+        """
+        let school = try! JSONDecoder().decode(SchoolDynamicCourse.self, from: Data(schoolJSON.utf8))
+        let reconciled = CourseGrades(school: school, rule: GradingRule())!
+        assert(near(reconciled.percent(), 88.2))
+        assert(near(reconciled.percent(additional: GradePoints(earned: 9, possible: 10), to: "Work"), 88.68))
+        assert(near(reconciled.percent(additional: GradePoints(earned: 90, possible: 100), to: "Work"), 88.68))
+        assert(near(reconciled.requiredScore(target: 90, addedMaximum: 20, in: "Work", count: 2), 19))
+        assert(reconciled.minimumCount(target: 90, maximum: 10, expected: 9.5, in: "Work") == 2)
+        assert(reconciled.requiredScore(target: 90, addedMaximum: 100, in: "Exam") == nil)
+        assert(near(reconciled.neededCategoryPercent(target: 90, in: "Exam"), 96))
+        assert(school.scale?.points(at: 89.94) == 3.3 && school.scale?.points(at: 89.96) == 4)
+        assert(school.scale?.minimumPercent(for: 4) == 90)
+
         let scale = GPAScale("90=4.0\n85=3.5\n80=3.0\n0=0")!
         assert(scale.points(at: 89.999) == 3.5 && scale.points(at: 90) == 4)
         assert(GPAScale("0=4\n90=3") == nil)

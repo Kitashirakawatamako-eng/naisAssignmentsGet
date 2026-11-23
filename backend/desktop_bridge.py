@@ -6,6 +6,7 @@ import sys
 import time
 
 import school_tasks as school
+from school_grades import DYNAMIC_FILE, DYNAMIC_STATUS_FILE, add_count_estimates, course_categories, read_dump, semester_summary
 from school_timetable import REFRESH_SECONDS, TIMETABLE_FILE, load_timetable, read_timetable, week_start
 from task_report import SUBJECT_NAMES, display_status, pending, submission_bucket, task_summary
 from task_records import flag, number, published_grade
@@ -22,13 +23,27 @@ def grade_label(grade):
     return f"{grade['score']} / {grade['total']}" if grade.get("total") else f"{grade['score']} 分"
 
 
-def semester_grades(client, now):
+def snapshot_date(value):
+    date = school.due_date(value)
+    return date.isoformat(timespec="seconds") if date else None
+
+
+def grade_semester(client, now):
     semester = school.get_semester(client)
     start = school.due_date(semester.get("startDate"))
     end = school.due_date(semester.get("endDate"))
     if start is None or end is None or not start.date() <= now.date() <= end.date():
         raise school.SyncError("学校未提供可核对的当前学期日期，已保留上次成绩。")
+    return semester, start, end
+
+
+def semester_grades(client, now):
+    semester, start, end = grade_semester(client, now)
     rows = school.collect_term_rows(client, semester, start.date().isoformat(), end.date().isoformat())
+    return normalize_term_grades(rows, semester, start, end, now)
+
+
+def normalize_term_grades(rows, semester, start, end, now):
     records = []
     for row in rows:
         if not flag(row.get("isSynchroToMobiled")):
@@ -42,18 +57,29 @@ def semester_grades(client, now):
                         "day": day.date().isoformat() if day else None,
                         "category": row.get("typeName") or row.get("typeEName") or "",
                         "exempt": flag(row.get("isExempt")) or row.get("finishState") in (6, "6"), **grade})
-    summary = client.get("/api/DynamicScore/GetStuSemesterDynamicScore", semesterId=semester["id"])
-    published = summary["studentSemesterDynamicScoreBasicDtos"]
-    course_scores = []
-    for row in published:
-        subject = row.get("subjectName") or row.get("subjectEName")
-        score = number(row.get("subjectScore")) if row.get("scoreType") == 1 else row.get("levelString")
-        if subject and score is not None:
-            course_scores.append({"course": subject, "subject": row.get("subjectEName") or subject, "value": str(score)})
-    gpa = number(client.get("/api/DynamicScore/GetGpa", semesterId=semester["id"])) if published else None
     return {"semester_id": str(semester["id"]), "start_day": start.date().isoformat(),
             "end_day": end.date().isoformat(), "checked_at": now.isoformat(), "records": records,
-            "source_published_count": len(records), "school_gpa": gpa, "school_scores": course_scores}
+            "source_published_count": len(records)}
+
+
+def import_grade_dump(root, folder):
+    semester, captured, dynamic, rows = read_dump(folder)
+    start, end = (school.due_date(semester.get(key)) for key in ("startDate", "endDate"))
+    if start is None or end is None or not start.date() <= captured.date() <= end.date() or not isinstance(rows, list):
+        raise school.SyncError("校宝采集文件的学期、时间或计分列表无法核对。")
+    grades = normalize_term_grades(rows, semester, start, end, captured)
+    # Construct both snapshots before touching either cache.
+    updated = 0
+    for path, data in ((GRADE_FILE, grades), (DYNAMIC_FILE, dynamic)):
+        try:
+            old = school.load_json(root / path, {})
+        except ValueError:
+            old = {}
+        previous = school.due_date(old.get("checked_at")) if isinstance(old, dict) else None
+        if previous is None or previous <= captured:
+            school.save_json(root / path, data)
+            updated += 1
+    return {"courses": len(dynamic["courses"]), "published_entries": len(grades["records"]), "updated": updated}
 
 
 def grade_snapshot(root, state, subjects):
@@ -106,10 +132,27 @@ def grade_snapshot(root, state, subjects):
         status = {}
     if not isinstance(status, dict):
         status = {}
-    return {"semester_id": imported.get("semester_id") or (str(local_semester) if local_semester is not None else None),
-            "start_day": lower, "end_day": upper, "checked_at": imported.get("checked_at"),
-            "last_attempt_at": status.get("attempted_at"), "sync_issue": status.get("error"),
-            "school_gpa": imported.get("school_gpa"), "school_scores": imported.get("school_scores", []),
+    semester_id = imported.get("semester_id") or (str(local_semester) if local_semester is not None else None)
+    try:
+        dynamic = school.load_json(root / DYNAMIC_FILE, {})
+        dynamic_status = school.load_json(root / DYNAMIC_STATUS_FILE, {})
+    except (OSError, ValueError):
+        dynamic, dynamic_status = {}, {}
+    if not isinstance(dynamic, dict) or not isinstance(dynamic.get("courses"), list) or not snapshot_date(dynamic.get("checked_at")):
+        dynamic = {}
+    if semester_id is not None and dynamic.get("semester_id") != semester_id:
+        dynamic = {}
+    if dynamic and imported.get("semester_id") == dynamic.get("semester_id"):
+        add_count_estimates(dynamic, history)
+    if dynamic:
+        dynamic["checked_at"] = snapshot_date(dynamic.get("checked_at"))
+    school_gpa = number(dynamic.get("gpa")) if dynamic.get("gpa") is not None else imported.get("school_gpa")
+    return {"semester_id": semester_id or dynamic.get("semester_id"),
+            "school_gpa": school_gpa, "school_scores": imported.get("school_scores", []),
+            "start_day": lower, "end_day": upper, "checked_at": snapshot_date(imported.get("checked_at")),
+            "last_attempt_at": snapshot_date(status.get("attempted_at")), "sync_issue": status.get("error"),
+            "dynamic": dynamic or None,
+            "dynamic_issue": dynamic_status.get("error") if isinstance(dynamic_status, dict) else None,
             "source_published_count": imported.get("source_published_count"),
             "records": sorted(records, key=lambda x: (x.get("day") or "", x["id"]), reverse=True)}
 
@@ -214,7 +257,7 @@ class DesktopBackend:
     def update_snapshot(self):
         paths = ("reports/latest.json", "data/status.json", "data/state.json",
                  "data/任务中文备注.json", ".private/session.json", ".private/auto-login.json", TIMETABLE_FILE,
-                 GRADE_FILE, GRADE_STATUS_FILE)
+                 GRADE_FILE, GRADE_STATUS_FILE, DYNAMIC_FILE, DYNAMIC_STATUS_FILE)
         stamp = [self.model_dir]
         for name in paths:
             try:
@@ -239,6 +282,41 @@ class DesktopBackend:
     def wait_for_server(self, exc):
         cached_until = self.session.client.rate_limit_until if self.session.client else 0.0
         self.rate_limit_until = max(self.rate_limit_until, cached_until, time.monotonic() + exc.retry_after)
+
+    def synchronize_dynamic_grades(self, now):
+        def read(client):
+            semester, _, _ = grade_semester(client, now)
+            ident = semester["id"]
+            data = semester_summary(client, ident, now)
+            school.save_json(self.root / DYNAMIC_FILE, data)
+            try:
+                for course in data["courses"]:
+                    try:
+                        course["categories"] = course_categories(client, ident, course)
+                    except (school.RateLimited, school.LoginRequired):
+                        raise
+                    except school.TemporarySyncError:
+                        break
+                    except (school.SyncError, ValueError, TypeError, KeyError):
+                        continue
+            finally:
+                school.save_json(self.root / DYNAMIC_FILE, data)
+            if any("categories" not in course for course in data["courses"]):
+                return "校宝部分课程的评估项目暂不可用。"
+            return None
+
+        issue = None
+        try:
+            issue = school.check_with_login(read)
+        except (school.RateLimited, school.LoginRequired) as exc:
+            issue = desktop_error(str(exc))
+            raise
+        except school.SyncError as exc:
+            issue = desktop_error(str(exc))
+        except (OSError, ValueError, TypeError, KeyError):
+            issue = "校宝动态成绩暂时无法读取，已保留上次结果。"
+        finally:
+            school.save_json(self.root / DYNAMIC_STATUS_FILE, {"attempted_at": now.isoformat(), "error": issue})
 
     def synchronize_timetable(self, now):
         started = time.monotonic()
@@ -339,11 +417,22 @@ class DesktopBackend:
                     raise school.RateLimited(self.rate_limit_until - started)
                 emit("working", operation="grades")
                 try:
-                    grades = school.check_with_login(lambda client: semester_grades(client, now))
-                    school.save_json(self.root / GRADE_FILE, grades)
+                    with school.lock(self.root, "grades"):
+                        self.synchronize_dynamic_grades(now)
+                        grades = school.check_with_login(lambda client: semester_grades(client, now))
+                        school.save_json(self.root / GRADE_FILE, grades)
                 except school.RateLimited as exc:
                     self.wait_for_server(exc)
                     raise
+            elif action == "import-grade-dump":
+                emit("working", operation=action)
+                with school.lock(self.root, "grades"):
+                    try:
+                        result = import_grade_dump(self.root, request["path"])
+                    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                        raise school.SyncError("无法导入校宝采集文件，请选择包含原始成绩响应的目录。") from exc
+                    if not result["updated"]:
+                        raise school.SyncError("本机已有更新的校宝成绩，已使用较新的记录。")
             elif action == "configure":
                 emit("working", operation="configure")
                 school.configure_auto_login(request["name"], request.pop("password"))
@@ -374,6 +463,13 @@ class DesktopBackend:
 
 def main():
     os.umask(0o077)
+    if len(sys.argv) == 3 and sys.argv[1] == "--import-grade-dump":
+        try:
+            with school.lock(school.ROOT, "grades"):
+                print(json.dumps(import_grade_dump(school.ROOT, sys.argv[2]), ensure_ascii=False))
+        except (school.SyncError, OSError, ValueError, KeyError, TypeError, AttributeError):
+            sys.exit("无法导入校宝成绩采集文件。请检查文件所在目录、学期和数据格式。")
+        return
     if sys.argv[1:] == ["--snapshot"]:
         print(json.dumps(snapshot(school.ROOT), ensure_ascii=False))
         return

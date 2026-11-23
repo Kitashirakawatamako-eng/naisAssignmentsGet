@@ -19,7 +19,7 @@ LEGACY_APP_NAME = "作业速览"
 WIDGET_BUNDLE = Path("Contents/PlugIns/TimetableWidget.appex")
 WIDGET_BINARY = WIDGET_BUNDLE / "Contents/MacOS/TimetableWidget"
 BACKEND_FILES = (
-    "desktop_bridge.py", "school_tasks.py", "school_keychain.py", "school_timetable.py",
+    "desktop_bridge.py", "school_tasks.py", "school_keychain.py", "school_timetable.py", "school_grades.py",
     "task_records.py", "task_report.py", "report_template.html",
 )
 MODEL_FILES = (

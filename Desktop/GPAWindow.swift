@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct GPAWindow: View {
     @ObservedObject var store: AssignmentStore
+    @Environment(\.locale) private var locale
     @AppStorage("gradePreferences") private var saved = Data()
     @State private var selectedCourse: String?
     @State private var category: String?
@@ -25,6 +27,7 @@ struct GPAWindow: View {
     private var book: SemesterGradeBook? { store.snapshot.gradeBook }
     private var term: String { offline ? "" : book?.semesterId ?? "" }
     private var schoolGrades: [SchoolGrade] { offline ? [] : book?.records ?? [] }
+    private var dynamic: SchoolDynamicGrades? { offline ? nil : book?.dynamic }
     private var allRecords: [SchoolGrade] {
         GradeCSV.merged(school: schoolGrades, imported: store.importedGrades.terms[term] ?? [])
     }
@@ -32,10 +35,34 @@ struct GPAWindow: View {
         (try? JSONDecoder().decode(GradePreferences.self, from: saved)) ?? GradePreferences()
     }
 
-    private var courses: [(id: String, subject: String)] {
+    private var localCourseNames: [String: String] {
         var names = offline ? [:] : Dictionary(uniqueKeysWithValues: store.courses.map { ($0.id, $0.label) })
         for grade in (offline ? [] : book?.schoolScores ?? []) where names[grade.course] == nil { names[grade.course] = grade.subject }
         for grade in allRecords where names[grade.course] == nil { names[grade.course] = grade.subject }
+        return names
+    }
+
+    private var schoolCourseByID: [String: SchoolDynamicCourse] {
+        let current = (dynamic?.courses ?? []).filter { CourseVisibility.includes($0.name, $0.englishName) }
+        let local = localCourseNames
+        let matches = current.map { schoolCourse in
+            local.filter {
+                schoolCourse.aliases.contains($0.key) || schoolCourse.aliases.contains($0.value)
+            }.map(\.key)
+        }
+        let counts = Dictionary(grouping: matches.flatMap { $0 }, by: { $0 })
+        return Dictionary(uniqueKeysWithValues: zip(current, matches).map { course, candidates in
+            if candidates.count == 1, let id = candidates.first, counts[id]?.count == 1 { return (id, course) }
+            return ("school:" + course.id, course)
+        })
+    }
+
+    private var courses: [(id: String, subject: String)] {
+        var names = localCourseNames
+        for (id, course) in schoolCourseByID where names[id] == nil {
+            let name = locale.identifier.hasPrefix("en") && !course.englishName.isEmpty ? course.englishName : course.name
+            names[id] = name.isEmpty ? course.className : name
+        }
         return names.map { (id: $0.key, subject: $0.value) }
             .sorted { $0.subject.localizedStandardCompare($1.subject) == .orderedAscending }
     }
@@ -64,6 +91,8 @@ struct GPAWindow: View {
                 .disabled(store.requesting)
                 .help("Read published grades without downloading assignments or attachments.")
                 Menu {
+                    Link("Open School Grades", destination: URL(string: "https://naisstu.schoolis.cn/Home#!/realtime/list")!)
+                    Button("Import School Grades Dump…") { chooseDump() }.disabled(store.requesting)
                     Button("Import Grades CSV…") { importOpen = true }
                     Button("Record Transcript GPA…") { reportedOpen = true }
                     Button("Copy Grade Sync Diagnostics") { store.copyGradeDiagnostics() }
@@ -83,12 +112,18 @@ struct GPAWindow: View {
                     .foregroundStyle(.orange).frame(maxWidth: .infinity, alignment: .leading).padding(12)
                 Divider()
             }
+            if !offline, let issue = book?.dynamicIssue, store.working != "grades", issue != store.gradeIssue {
+                Label(LocalizedStringKey(issue), systemImage: "exclamationmark.circle")
+                    .foregroundStyle(.orange).frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                Divider()
+            }
             if let course = activeCourse {
                 HStack(spacing: 0) {
                     sidebar.frame(width: 230)
                     Divider()
                     let data = grades(for: course)
-                    let groups = availableGroups(for: course)
+                    let groups = data.averagesItems ? (data.weights ?? [:]).filter { $0.value > 0 }.keys.sorted() :
+                        availableGroups(for: course)
                     let selected = category.flatMap { groups.contains($0) ? $0 : nil } ?? groups.first ?? CourseGrades.totalGroup
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
@@ -117,6 +152,7 @@ struct GPAWindow: View {
                     Text("No Grades Yet").font(.headline)
                     Text("Sync semester grades to get started.").foregroundStyle(.secondary)
                     Button("Import Grades CSV…") { importOpen = true }
+                    schoolGPA
                     transcriptGPA
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -138,7 +174,10 @@ struct GPAWindow: View {
             }
         }
         .sheet(isPresented: $scenarioOpen) {
-            GradeScenarioEditor(courses: courses.map { GradeScenarioEditor.Course(id: $0.id, name: $0.subject, grades: grades(for: $0.id)) },
+            GradeScenarioEditor(courses: courses.filter { eligibleForGPA($0.id) }.map {
+                GradeScenarioEditor.Course(id: $0.id, name: $0.subject,
+                                          grades: grades(for: $0.id), school: schoolCourseByID[$0.id])
+            },
                                 scale: GPAScale(preferences.scale), initial: preferences.scenarios?[term] ?? [],
                                 target: GradePoints.number(targetGPA)) { value in
                 update { $0.scenarios = ($0.scenarios ?? [:]).merging([term: value]) { _, new in new } }
@@ -159,14 +198,32 @@ struct GPAWindow: View {
         .sheet(isPresented: $previewOpen) { importPreview }
     }
 
+    private func chooseDump() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = String(localized: "Import")
+        panel.begin { response in
+            if response == .OK, let folder = panel.url { store.importGradeDump(folder) }
+        }
+    }
+
+    private func publishedScore(_ course: String) -> String? {
+        offline ? nil : book?.schoolScores?.first { $0.course == course }?.value
+    }
+
     private var sidebar: some View {
-        List(selection: $selectedCourse) {
+        let published = schoolCourseByID
+        return List(selection: $selectedCourse) {
             Section("Subjects") {
                 ForEach(courses, id: \.id) { course in
                     HStack(spacing: 5) {
                         Text(course.subject).lineLimit(1)
                         Spacer(minLength: 4)
-                        Text(verbatim: (offline ? nil : book?.schoolScores?.first { $0.course == course.id }?.value) ?? "—").monospacedDigit().foregroundStyle(.secondary)
+                        let display = published[course.id]?.percent.map(percentText) ?? published[course.id]?.level
+                            ?? publishedScore(course.id) ?? "—"
+                        Text(verbatim: display)
+                            .monospacedDigit().foregroundStyle(.secondary)
                     }
                     .tag(course.id)
                 }
@@ -178,20 +235,50 @@ struct GPAWindow: View {
     }
 
     private func courseSummary(_ course: String, _ data: CourseGrades) -> some View {
-        GradeSection {
+        let published = schoolCourseByID[course]
+        let percentage = published?.percent
+        let official = percentage.map(percentText) ?? published?.level ?? publishedScore(course)
+        return GradeSection {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(courses.first { $0.id == course }?.subject ?? course).font(.title3.weight(.semibold))
-                    Text(verbatim: (offline ? nil : book?.schoolScores?.first { $0.course == course }?.value) ?? "—")
+                    Text(verbatim: official ?? "—")
                         .font(.system(size: 39, weight: .semibold, design: .rounded)).monospacedDigit()
-                    Text("SchoolPal course grade")
-                        .font(.caption).foregroundStyle(.secondary)
+                    if let published {
+                        Text("School course grade").font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            if let level = published.level, !level.isEmpty { Text(level) }
+                            if let points = published.points { Text("Course GPA Points \(gpaText(points))") }
+                            if !data.averagesItems, let estimated = data.percent() { Text("Local estimate \(percentText(estimated))") }
+                        }.font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("SchoolPal course grade").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Button("Course Rules…") { ruleOpen = true }
             }
-            if !offline { LabeledContent("SchoolPal GPA", value: book?.schoolGpa ?? "—") }
-            Text("\(data.scored) scored · \(data.unscored) incomplete · \(data.omitted) excluded")
+            schoolGPA
+            if let percentage { ProgressView(value: min(max(percentage, 0), 100), total: 100) }
+            if let categories = published?.categories, !categories.isEmpty {
+                DisclosureGroup("School Grade Categories") {
+                    ForEach(Array(categories.enumerated()), id: \.offset) { _, item in SchoolCategoryRow(item: item) }
+                }
+            }
+            if let ranges = published?.ranges, !ranges.isEmpty {
+                DisclosureGroup("School GPA Scale") {
+                    ForEach(Array(ranges.sorted { $0.minimum > $1.minimum }.enumerated()), id: \.offset) { _, range in
+                        HStack {
+                            Text(range.level).frame(width: 45, alignment: .leading)
+                            Text("\(range.includesMinimum ? "≥" : ">")\(percentText(range.minimum)) · \(range.includesMaximum ? "≤" : "<")\(percentText(range.maximum))")
+                            Spacer()
+                            if let points = range.points { Text(gpaText(points)).monospacedDigit() }
+                        }.padding(.vertical, 2)
+                    }
+                }
+            }
+            Text(data.averagesItems ? LocalizedStringKey("\(data.scored) items inferred from published grades") :
+                    LocalizedStringKey("\(data.scored) scored · \(data.unscored) incomplete · \(data.omitted) excluded"))
                 .font(.caption).foregroundStyle(.secondary)
             coverage
             if data.rule.weighted, data.percent() == nil {
@@ -241,13 +328,24 @@ struct GPAWindow: View {
                     ForEach(groups, id: \.self) { name in Text(LocalizedStringKey(name)).tag(name) }
                 }
             }
+            if data.averagesItems {
+                Text("Uses school category weights. Item counts are estimated where task grades match.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             HStack(spacing: 10) {
                 input("Target %", text: $target)
                 input("Max Points Each", text: $maximum)
                 input("Expected Points", text: $expected)
                 input("Number of Items", text: $count)
             }
-            if let target = GradePoints.number(target), target <= 200,
+            if data.needsItemCount(in: group) {
+                Text("The school provided the category grade. The number of counted items is unavailable.")
+                    .foregroundStyle(.secondary)
+                if let goal = GradePoints.number(target), let needed = data.neededCategoryPercent(target: goal, in: group) {
+                    Text("To reach the course goal, the category needs \(percentText(needed)).")
+                    if needed > 100 { Text("Changing this category alone cannot reach the goal.").foregroundStyle(.orange) }
+                }
+            } else if let target = GradePoints.number(target), target <= 200,
                let maximum = GradePoints.number(maximum), maximum > 0,
                let needed = data.requiredScore(target: target, addedMaximum: maximum, in: group) {
                 if needed <= maximum + 1e-8 {
@@ -264,13 +362,13 @@ struct GPAWindow: View {
                 if let expected = GradePoints.number(expected), expected <= maximum,
                    let count = Int(count), (1...200).contains(count),
                    let projection = data.percent(additional: GradePoints(earned: expected * Double(count),
-                                                                         possible: maximum * Double(count)), to: group) {
+                                                                         possible: maximum * Double(count)), to: group, count: count) {
                     Text("After \(count) items at \(plain(expected)) points each: \(percentText(projection))")
                     let capacity = maximum * Double(count)
-                    if let total = data.requiredScore(target: target, addedMaximum: capacity, in: group) {
+                    if let total = data.requiredScore(target: target, addedMaximum: capacity, in: group, count: count) {
                         if total <= capacity + 1e-8 {
                             Text("To hit the goal in \(count) items, average at least \(roundedUp(total / Double(count))) points each.")
-                        } else if let best = data.percent(additional: GradePoints(earned: capacity, possible: capacity), to: group) {
+                        } else if let best = data.percent(additional: GradePoints(earned: capacity, possible: capacity), to: group, count: count) {
                             Text("With full marks on all \(count) items, the highest grade is \(percentText(best)).")
                                 .foregroundStyle(.orange)
                         }
@@ -378,26 +476,37 @@ struct GPAWindow: View {
                 Button("GPA Scale…") { scaleOpen = true }
             }
             transcriptGPA
-            if let scale = GPAScale(preferences.scale) {
-                if preferences.scale == GPAScale.example {
+            let published = schoolCourseByID[course]
+            let publishedScale = published?.scale
+            if let points = published?.points, let scale = publishedScale,
+               let next = scale.steps.first(where: { $0.points > points + 1e-9 }) {
+                Button("Next GPA tier \(gpaText(next.points)) at \(percentText(next.minimum))") {
+                    target = plain(next.minimum)
+                }.buttonStyle(.link)
+            }
+            if let scale = publishedScale ?? GPAScale(preferences.scale) {
+                if publishedScale == nil, preferences.scale == GPAScale.example {
                     Text("This calculation uses the example GPA scale.").font(.caption).foregroundStyle(.orange)
                 }
-                let current = creditTotal(using: scale)
+                let current = creditTotal()
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(current.average.map(gpaText) ?? "—")
                         .font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
-                    let eligible = courses.filter { rule(for: $0.id).excludedFromGPA != true }.count
+                    let eligible = courses.filter { eligibleForGPA($0.id) }.count
                     Text("\(current.courses) of \(eligible) courses included")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     input("Target GPA", text: $targetGPA).frame(maxWidth: 120)
                 }
-                if data.rule.excludedFromGPA == true {
+                if dynamic?.courses.isEmpty == false, published == nil {
+                    Text("This course has no entry in the school GPA results.").font(.caption).foregroundStyle(.secondary)
+                } else if !eligibleForGPA(course) {
                     Text("This course is excluded from GPA.").font(.caption).foregroundStyle(.secondary)
                 } else if let target = GradePoints.number(targetGPA), target <= 20,
-                   let credits = GradePoints.number(data.rule.credits), credits > 0, data.percent() != nil {
-                    let others = creditTotal(using: scale, except: course)
-                    let bonus = GradePoints.number(data.rule.bonus) ?? 0
+                   let credits = GradePoints.number(data.rule.credits), credits > 0,
+                   current.courses == courses.filter({ eligibleForGPA($0.id) }).count {
+                    let others = creditTotal(except: course)
+                    let bonus = publishedScale == nil ? (GradePoints.number(data.rule.bonus) ?? 0) : 0
                     if let threshold = scale.minimumPercent(for: others.pointsNeeded(to: target, courseCredits: credits) - bonus) {
                         Text("With other included courses fixed, this course needs \(percentText(threshold)).")
                         if let maximum = GradePoints.number(maximum), maximum > 0,
@@ -510,7 +619,12 @@ struct GPAWindow: View {
 
     private func grades(for course: String) -> CourseGrades {
         let pref = preferences
-        return CourseGrades(records: records(for: course), rule: rule(for: course), groups: pref.groups, excluded: pref.omitted)
+        let rule = rule(for: course)
+        let useSchool = !rule.weighted && rule.pastPoints.isEmpty
+        let published = useSchool ? schoolCourseByID[course] : nil
+        if let published, let data = CourseGrades(school: published, rule: rule) { return data }
+        return CourseGrades(records: records(for: course), rule: rule, groups: pref.groups, excluded: pref.omitted,
+                            canProject: published == nil)
     }
 
     private func groupsForRules(_ course: String) -> [String] {
@@ -523,13 +637,21 @@ struct GPAWindow: View {
         rule(for: course).weighted ? groupsForRules(course) : [CourseGrades.totalGroup]
     }
 
-    private func creditTotal(using scale: GPAScale, except course: String? = nil) -> GPACreditTotal {
+    private func eligibleForGPA(_ course: String) -> Bool {
+        guard rule(for: course).excludedFromGPA != true else { return false }
+        if let school = schoolCourseByID[course] { return school.includedInGpa != false }
+        return dynamic?.courses.isEmpty != false
+    }
+
+    private func creditTotal(except course: String? = nil) -> GPACreditTotal {
         var total = GPACreditTotal()
-        for candidate in courses where candidate.id != course {
+        for candidate in courses where candidate.id != course && eligibleForGPA(candidate.id) {
             let data = grades(for: candidate.id)
-            guard data.rule.excludedFromGPA != true, let percent = data.percent(), let points = scale.points(at: percent),
-                  let credits = GradePoints.number(data.rule.credits), credits > 0 else { continue }
-            total.add(points: points + (GradePoints.number(data.rule.bonus) ?? 0), credits: credits)
+            let school = schoolCourseByID[candidate.id]
+            let fallback = data.percent().flatMap { GPAScale(preferences.scale)?.points(at: $0) }
+            guard let points = school?.points ?? fallback, let credits = GradePoints.number(data.rule.credits), credits > 0 else { continue }
+            let bonus = school?.points == nil ? (GradePoints.number(data.rule.bonus) ?? 0) : 0
+            total.add(points: points + bonus, credits: credits)
         }
         return total
     }
@@ -542,6 +664,25 @@ struct GPAWindow: View {
                 if !reported.basis.isEmpty { Text(LocalizedStringKey(reported.basis)).foregroundStyle(.secondary) }
             }.font(.callout)
             Text("Recorded from a transcript on this Mac").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var schoolGPA: some View {
+        if let dynamic {
+            if let gpa = dynamic.gpa {
+                let text = gpaText(gpa)
+                Text(dynamic.archived ? LocalizedStringKey("School Archived GPA \(text)") :
+                        LocalizedStringKey("School Dynamic GPA \(text)"))
+                    .font(.title2.weight(.semibold)).monospacedDigit()
+            }
+            if let checked = Beijing.parse(dynamic.checkedAt) {
+                let time = Beijing.dateTime(checked)
+                Text(dynamic.fromDump == true ? LocalizedStringKey("School grades captured \(time)") :
+                        LocalizedStringKey("School grades fetched \(time)"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } else if !offline, let gpa = book?.schoolGpa {
+            LabeledContent("SchoolPal GPA", value: gpa)
         }
     }
 
@@ -569,6 +710,32 @@ struct GPAWindow: View {
         var value = preferences
         changes(&value)
         if let encoded = try? JSONEncoder().encode(value) { saved = encoded }
+    }
+}
+
+private struct SchoolCategoryRow: View {
+    let item: SchoolGradeCategory
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        let grade = [item.score.map(plain), item.level].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " / ")
+        let name = locale.identifier.hasPrefix("en") && !item.englishName.isEmpty ? item.englishName : item.name
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(name)
+                if let count = item.estimatedCount {
+                    Text("About \(count) counted items").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(item.weight.map(percentText) ?? "—")
+                    .frame(minWidth: 58, alignment: .trailing)
+                Text(grade.isEmpty ? "—" : grade)
+                    .frame(minWidth: 95, alignment: .trailing)
+            }.monospacedDigit()
+            ForEach(Array(item.children.enumerated()), id: \.offset) { _, child in
+                SchoolCategoryRow(item: child).padding(.leading, 14)
+            }
+        }.padding(.vertical, 3)
     }
 }
 
@@ -610,6 +777,13 @@ private struct CourseRuleEditor: View {
                 TextField("Credits", text: $draft.credits)
                 TextField("GPA Bonus", text: $draft.bonus)
                 Toggle("Weight by category", isOn: $draft.weighted)
+                if draft.weighted {
+                    Toggle("Skip ungraded categories", isOn: Binding(
+                        get: { draft.ignoreUngradedCategories == true },
+                        set: { draft.ignoreUngradedCategories = $0 }
+                    ))
+                    .help("Calculate using the relative weights of categories with scores. A published zero still counts.")
+                }
             }
             Divider()
             if draft.weighted {
@@ -622,6 +796,10 @@ private struct CourseRuleEditor: View {
                     }.disabled(extraName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Text("Positive category weights must add up to 100%.").font(.caption).foregroundStyle(.secondary)
+                if draft.ignoreUngradedCategories == true {
+                    Text("Use this only when empty categories truly have no grades.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Text("Earlier Points").font(.headline)
             Text("Enter only points from grades absent from the list.")

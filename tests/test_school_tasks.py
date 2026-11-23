@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 import desktop_bridge
+import school_grades
 import school_tasks as app
 from school_timetable import load_timetable, read_timetable
 from task_records import published_grade, task_metadata
@@ -18,6 +19,43 @@ from task_report import translate_lines
 
 NOW = datetime(2026, 11, 11, 12, tzinfo=app.TZ)
 MONTH_START = NOW.replace(day=1, hour=0)
+
+
+class DynamicGradeTests(unittest.TestCase):
+    def test_school_ranges_and_grade_categories(self):
+        client = MagicMock()
+        prefix = school_grades.API
+        mappings = [{
+            "scoresMappingId": 1, "isUseGpa": True, "scoreMappingConfigs": [
+                {"displayName": "B", "minValue": 0, "maxValue": 90, "isContainMin": True, "gpa": 3},
+                {"displayName": "A", "minValue": 90, "maxValue": 100,
+                 "isContainMin": True, "isContainMax": True, "gpa": 4},
+            ],
+        }]
+        numeric = {"classId": 1, "subjectId": 2, "subjectName": "数学", "subjectEName": "Math",
+                   "scoreType": 1, "subjectScore": 89.96, "subjectTotalScore": 100, "scoreMappingId": 1, "isInGrade": True}
+        responses = {
+            "GetStuSemesterDynamicScore": {"scoreMappingList": mappings, "studentSemesterDynamicScoreBasicDtos": [
+                numeric, dict(numeric, classId=2, isInGrade=False),
+                {"classId": 3, "subjectId": 4, "scoreType": 2, "levelString": "Pass"},
+            ]},
+            "GetGpa": 0, "ListGpaSettings": {"useDynamicGPA": True}, "IsStudentSemesterScoreStorage": True,
+            "GetDynamicScoreDetail": {"evaluationProjectList": [
+                {"evaluationProjectName": "Quiz", "proportion": 25, "score": 0},
+                {"evaluationProjectName": "Project", "proportion": 75, "score": 0, "scoreIsNull": True},
+            ]},
+        }
+        client.get.side_effect = lambda path, **kwargs: copy.deepcopy(responses[path.removeprefix(prefix)])
+        result = school_grades.semester_summary(client, "term", NOW)
+        self.assertEqual(result["gpa"], 0)
+        self.assertFalse(result["archived"])
+        enrolled, excluded, level = result["courses"]
+        self.assertEqual((enrolled["level"], enrolled["points"]), ("A", 4))
+        self.assertEqual((excluded["level"], excluded["points"]), ("A", None))
+        self.assertEqual((level["level"], level["percent"]), ("Pass", None))
+        rows = school_grades.course_categories(client, "term", enrolled)
+        self.assertEqual([(r["weight"], r["score"]) for r in rows], [(25, 0), (75, None)])
+        client.get.assert_called_with(prefix + "GetDynamicScoreDetail", semesterId="term", classId=1, subjectId=2)
 
 
 class FakeClient:
@@ -33,7 +71,14 @@ class FakeClient:
         if path.endswith("GetGpa"):
             return 3.89
         if path.endswith("GetStuSemesterDynamicScore"):
-            return {"studentSemesterDynamicScoreBasicDtos": [{"subjectName": "Math", "scoreType": 1, "subjectScore": 0}]}
+            return {"studentSemesterDynamicScoreBasicDtos": [{"classId": 1, "subjectId": 2,
+                "subjectName": "Math", "scoreType": 1, "subjectScore": 0, "subjectTotalScore": 100}]}
+        if path.endswith("ListGpaSettings"):
+            return {"useDynamicGPA": True}
+        if path.endswith("IsStudentSemesterScoreStorage"):
+            return False
+        if path.endswith("GetDynamicScoreDetail"):
+            return {"evaluationProjectList": []}
         if path.endswith("GetList"):
             size = params["pageSize"]
             start = (params["pageIndex"] - 1) * size
@@ -61,8 +106,6 @@ class SyncTests(unittest.TestCase):
             {"id": "e", "name": "Out of term", "subjectName": "Math", "beginTime": "2026-08-01", **grade},
         ])
         snapshot = desktop_bridge.semester_grades(client, NOW)
-        self.assertEqual(snapshot["school_gpa"], "3.89")
-        self.assertEqual(snapshot["school_scores"][0]["value"], "0")
         self.assertEqual(snapshot["start_day"], "2026-09-01")
         self.assertEqual([(r["id"], r.get("score"), r.get("level")) for r in snapshot["records"]],
                          [("a", "0", None), ("c", None, "A"), ("d", None, None)])
@@ -70,6 +113,26 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(snapshot["records"][-1]["category"], "Exam")
         self.assertNotIn("content", snapshot["records"][-1])
         self.assertEqual(client.detail_requests, [])
+
+    def test_grade_sync_shares_published_gpa_with_widget_and_retains_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = FakeClient()
+            with (patch.object(app, "ROOT", root), patch.object(app, "AttachmentWorker"),
+                  patch.object(desktop_bridge, "emit"),
+                  patch.object(desktop_bridge, "datetime") as clock,
+                  patch.object(app, "check_with_login", side_effect=lambda read: read(client)),
+                  patch.object(client, "get", wraps=client.get) as requests):
+                clock.now.return_value = NOW
+                desktop_bridge.DesktopBackend().handle({"action": "grades"})
+            result = desktop_bridge.grade_snapshot(root, {}, {})
+            self.assertEqual(result["school_gpa"], "3.89")
+            self.assertEqual(result["dynamic"]["gpa"], 3.89)
+            self.assertEqual(result["dynamic"]["courses"][0]["percent"], 0)
+            names = [call.args[0].split("/")[-1] for call in requests.call_args_list]
+            self.assertEqual(names.count("GetGpa"), 1)
+            self.assertEqual(names.count("GetStuSemesterDynamicScore"), 1)
+            self.assertIsNone(result["sync_issue"])
 
     def test_failed_grade_sync_preserves_prior_results_and_records_failure(self):
         with tempfile.TemporaryDirectory() as directory:
