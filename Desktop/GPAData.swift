@@ -123,6 +123,19 @@ struct GradePreferences: Codable, Equatable {
     var sectionPlans: [String: [GradeSectionInput]]?
     var priorTerms: [String: PriorGPA]?
     var scenarios: [String: [PlannedGrade]]?
+    var courseScenarios: [String: [PlannedGrade]]?
+}
+
+struct CourseTaskImpact {
+    struct Category: Identifiable {
+        let id: String
+        let weight: Double
+        let before: Double?
+        let after: Double
+    }
+
+    let categories: [Category]
+    let coursePercent: Double
 }
 
 struct CourseGrades {
@@ -177,6 +190,38 @@ struct CourseGrades {
     }
 
     func needsItemCount(in group: String) -> Bool { fixedPercentages[group] != nil }
+
+    var scenarioCategories: [String] {
+        (weights ?? [:]).filter { $0.value > 0 }.keys.sorted()
+    }
+
+    func impact(of items: [PlannedGrade], assumedCounts: [String: Int] = [:]) -> CourseTaskImpact? {
+        guard let weights, !items.isEmpty else { return nil }
+        var baseline = self
+        var additions: [String: GradePoints] = [:]
+        for item in items {
+            let group = item.category
+            guard let weight = weights[group], weight > 0,
+                  let points = GradePoints(earned: item.expected, possible: item.maximum),
+                  points.earned <= points.possible else { return nil }
+            if let score = baseline.fixedPercentages[group] {
+                guard let count = assumedCounts[group], (1...1_000_000).contains(count) else { return nil }
+                let itemCount = Double(count)
+                baseline.totals[group] = GradePoints(earned: score / 100 * itemCount, possible: itemCount)
+                baseline.fixedPercentages.removeValue(forKey: group)
+            }
+            additions[group, default: .empty].add(itemTotals(points))
+        }
+        guard let percent = baseline.percent(additions: additions) else { return nil }
+        let changed = additions.keys.sorted().compactMap { group -> CourseTaskImpact.Category? in
+            var combined = baseline.totals[group, default: .empty]
+            combined.add(additions[group, default: .empty])
+            guard let after = combined.percent, let weight = weights[group] else { return nil }
+            let before = totals[group]?.percent ?? fixedPercentages[group]
+            return CourseTaskImpact.Category(id: group, weight: weight * 100, before: before, after: after)
+        }
+        return CourseTaskImpact(categories: changed, coursePercent: percent)
+    }
 
     var weights: [String: Double]? {
         guard canProject else { return nil }
