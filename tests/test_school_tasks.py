@@ -705,3 +705,25 @@ class SyncTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AccountIsolationTests(unittest.TestCase):
+    def test_foreign_host_is_refused(self):
+        client = app.Client(fresh=True)
+        for path in ("https://example.com/collect", "//evil.example/api", "api/../../x"):
+            with self.assertRaises(app.SyncError):
+                client._json_request(path, {})
+
+    def test_keychain_item_is_per_account(self):
+        import importlib
+        import os
+        import school_keychain
+        try:
+            with patch.dict(os.environ, {"SP_ASSIGNMENTS_ACCOUNT": "account-2"}):
+                module = importlib.reload(school_keychain)
+                self.assertEqual(module.SERVICE, school_keychain.BASE_SERVICE + b".account-2")
+                self.assertNotEqual(module.ITEM, module.LEGACY_ITEM)
+        finally:
+            os.environ.pop("SP_ASSIGNMENTS_ACCOUNT", None)
+            importlib.reload(school_keychain)
+        self.assertEqual(school_keychain.SERVICE, school_keychain.BASE_SERVICE)

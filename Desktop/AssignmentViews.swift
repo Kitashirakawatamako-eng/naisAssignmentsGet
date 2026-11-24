@@ -527,6 +527,8 @@ struct AssignmentSettings: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                     .disabled(store.working == "configure")
             }
+            AccountSettingsView(store: store)
+            Divider()
             LanguageSettings()
             Divider()
             AppearanceSettings()

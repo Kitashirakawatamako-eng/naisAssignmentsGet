@@ -1,12 +1,16 @@
 """Read and write only the school's auto-login item in the macOS Keychain."""
 import ctypes as c
+import os
 from functools import lru_cache
 import json
 
 
-SERVICE = b"cn.schoolis.naisstu.SP_Assignments"
+BASE_SERVICE = b"cn.schoolis.naisstu.SP_Assignments"
 ACCOUNT = b"automatic-login"
+SERVICE = (BASE_SERVICE + b"." + os.environ.get("SP_ASSIGNMENTS_ACCOUNT", "").strip().encode()
+           if os.environ.get("SP_ASSIGNMENTS_ACCOUNT", "").strip() else BASE_SERVICE)
 ITEM = (None, len(SERVICE), SERVICE, len(ACCOUNT), ACCOUNT)
+LEGACY_ITEM = (None, len(BASE_SERVICE), BASE_SERVICE, len(ACCOUNT), ACCOUNT)
 NOT_FOUND = -25300
 DUPLICATE = -25299
 
@@ -40,6 +44,8 @@ def read_credential():
     security, _ = frameworks()
     size, buffer = c.c_uint32(), c.c_void_p()
     status = security.SecKeychainFindGenericPassword(*ITEM, c.byref(size), c.byref(buffer), None)
+    if status == NOT_FOUND and ITEM != LEGACY_ITEM:
+        status = security.SecKeychainFindGenericPassword(*LEGACY_ITEM, c.byref(size), c.byref(buffer), None)
     if status == NOT_FOUND:
         return None
     if status != 0:

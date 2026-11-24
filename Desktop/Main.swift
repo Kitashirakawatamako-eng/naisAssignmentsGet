@@ -40,9 +40,8 @@ struct HomeworkApp: App {
             }
             preferences.set(true, forKey: "creatureThemesIntroduced")
         }
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/作业速览", isDirectory: true)
-        let instance = AssignmentStore(root: root, resources: Bundle.main.resourceURL)
+        Accounts.prepare()
+        let instance = AssignmentStore(root: Accounts.activeRoot, resources: Bundle.main.resourceURL)
         _store = StateObject(wrappedValue: instance)
         _assistant = StateObject(wrappedValue: instance.assistant)
     }
