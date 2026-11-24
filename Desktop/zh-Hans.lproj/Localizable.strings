@@ -486,3 +486,17 @@
 "Added. Switch to it and sign in with that school account." = "已添加。切换到它并用该学校账号登录。";
 "Keep at least one account." = "至少要保留一个账号。";
 "Switch to another account before deleting this one." = "请先切换到别的账号，再删除这个。";
+"Score entry" = "分数录入方式";
+"Mixed tasks" = "自由组合";
+"Repeated score" = "相同分数反推";
+"Semester forecast weights" = "学期绩点试算权重";
+"Equal course weights" = "各科等权";
+"Course credits" = "按学分加权";
+"Count" = "项目数";
+"Above / below course goal" = "高于 / 低于课程目标（百分点）";
+"Estimated semester GPA change" = "预计学期绩点变化";
+"Semester impact requires an included course and grade points for each included course. Credit weighting also requires all credits." = "所选课程须纳入绩点，且每门参与课程都要有绩点。按学分加权时，还需填齐课程学分。";
+"Check each score, maximum, and count (1–200), including any required existing item counts." = "请检查每行得分、满分和项目数（1–200），并补填所需的已有项目数。";
+"Published category scores" = "学校已公布的类别成绩";
+"Current → projected" = "当前成绩 → 预计成绩";
+"All items" = "全部项目";

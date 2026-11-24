@@ -111,6 +111,7 @@ struct PlannedGrade: Codable, Equatable, Identifiable {
     var category = CourseGrades.totalGroup
     var maximum = "100"
     var expected = "95"
+    var repetitions: String?
 }
 
 struct GradePreferences: Codable, Equatable {
@@ -210,7 +211,10 @@ struct CourseGrades {
                 baseline.totals[group] = GradePoints(earned: score / 100 * itemCount, possible: itemCount)
                 baseline.fixedPercentages.removeValue(forKey: group)
             }
-            additions[group, default: .empty].add(itemTotals(points))
+            guard let repeatCount = Int(item.repetitions ?? "1"), (1...200).contains(repeatCount) else { return nil }
+            let one = itemTotals(points)
+            additions[group, default: .empty].add(GradePoints(earned: one.earned * Double(repeatCount),
+                                                             possible: one.possible * Double(repeatCount)))
         }
         guard let percent = baseline.percent(additions: additions) else { return nil }
         let changed = additions.keys.sorted().compactMap { group -> CourseTaskImpact.Category? in

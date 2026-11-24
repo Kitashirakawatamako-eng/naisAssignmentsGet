@@ -127,12 +127,10 @@ struct CourseTaskImpactEditor: View {
     @Binding var items: [PlannedGrade]
     @State private var assumedCounts: [String: String] = [:]
 
-    init(courseID: String, school: SchoolDynamicCourse?, grades: CourseGrades?, items: Binding<[PlannedGrade]>) {
-        self.courseID = courseID
-        self.school = school
-        self.grades = grades
-        _items = items
-    }
+    let editable: Bool
+    let target: Double?
+    let fallbackScale: GPAScale?
+    let semesterImpact: (Double) -> String?
 
     private var categories: [String] { grades?.scenarioCategories ?? [] }
     private var missingCounts: [String] {
@@ -143,29 +141,40 @@ struct CourseTaskImpactEditor: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Task impact on this course", systemImage: "arrow.triangle.branch").font(.headline)
             if let grades, !categories.isEmpty {
-                ForEach($items) { $item in
-                    HStack(alignment: .bottom) {
-                        Picker("School category", selection: $item.category) {
-                            ForEach(categories, id: \.self) { Text(verbatim: $0).tag($0) }
+                if let parts = school?.categories, !parts.isEmpty {
+                    DisclosureGroup("Published category scores") {
+                        ForEach(parts.indices, id: \.self) { index in
+                            let part = parts[index]
+                            LabeledContent(part.name, value: part.score.map(percent) ?? "—")
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        field("Expected Score", text: $item.expected)
-                        field("Max Points Each", text: $item.maximum)
-                        Button {
-                            let id = item.id
-                            items.removeAll { $0.id == id }
-                        } label: {
-                            Image(systemName: "minus.circle")
-                        }.buttonStyle(.borderless).accessibilityLabel("Remove Item")
                     }
                 }
-                Button("Add task to forecast") {
-                    if let category = items.last?.category, categories.contains(category) {
-                        items.append(PlannedGrade(course: courseID, category: category, expected: ""))
-                    } else if let category = categories.first(where: { !grades.needsItemCount(in: $0) }) ?? categories.first {
-                        items.append(PlannedGrade(course: courseID, category: category, expected: ""))
+                if editable {
+                    ForEach($items) { $item in
+                        HStack(alignment: .bottom) {
+                            Picker("School category", selection: $item.category) {
+                                ForEach(categories, id: \.self) { Text($0.isEmpty ? String(localized: "All items") : $0).tag($0) }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            field("Expected Score", text: $item.expected)
+                            field("Max Points Each", text: $item.maximum)
+                            field("Count", text: Binding(get: { item.repetitions ?? "1" }, set: { item.repetitions = $0 }))
+                            Button {
+                                let id = item.id
+                                items.removeAll { $0.id == id }
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }.buttonStyle(.borderless).accessibilityLabel("Remove Item")
+                        }
                     }
-                }.disabled(items.count >= 200)
+                    Button("Add task to forecast") {
+                        if let category = items.last?.category, categories.contains(category) {
+                            items.append(PlannedGrade(course: courseID, category: category, expected: ""))
+                        } else if let category = categories.first(where: { !grades.needsItemCount(in: $0) }) ?? categories.first {
+                            items.append(PlannedGrade(course: courseID, category: category, expected: ""))
+                        }
+                    }.disabled(items.count >= 200)
+                }
                 if items.isEmpty {
                     Text("Add one or more tasks to see how their scores affect this course.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -197,27 +206,39 @@ struct CourseTaskImpactEditor: View {
         let counts = assumedCounts.compactMapValues { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         if let result = grades.impact(of: items, assumedCounts: counts) {
             Divider()
+            Text("Current → projected").font(.caption).foregroundStyle(.secondary)
             ForEach(result.categories) { row in
                 LabeledContent {
                     Text(change(from: row.before, to: row.after)).monospacedDigit()
                 } label: {
-                    Text("\(row.id) · weight \(percent(row.weight))")
+                    Text("\(row.id.isEmpty ? String(localized: "All items") : row.id) · weight \(percent(row.weight))")
                 }
             }
             Divider()
             let total = roundedCoursePercent(result.coursePercent)
             LabeledContent("Course grade", value: change(from: school?.percent ?? grades.percent(), to: total))
                 .fontWeight(.semibold)
-            if let points = school?.scale?.points(at: total) {
-                LabeledContent("Course GPA points", value: "\(school?.points.map(gpa) ?? "—") → \(gpa(points))")
+            if let target, target <= 100 {
+                let gap = total - target
+                LabeledContent("Above / below course goal", value: String(format: "%+.2f pp", gap))
+            }
+            if let mapped = (school?.scale ?? fallbackScale)?.points(at: total) {
+                let bonus = school?.scale == nil ? GradePoints.number(grades.rule.bonus) ?? 0 : 0
+                let points = mapped + bonus
+                let currentPoints = school?.points ?? grades.percent().flatMap { fallbackScale?.points(at: $0) }.map { $0 + bonus }
+                LabeledContent("Course GPA points", value: "\(currentPoints.map(gpa) ?? "—") → \(gpa(points))")
                     .fontWeight(.semibold)
+                if let change = semesterImpact(points) {
+                    LabeledContent("Estimated semester GPA change", value: change)
+                } else {
+                    Text("Semester impact requires an included course and grade points for each included course. Credit weighting also requires all credits.").font(.caption)
+                }
             } else {
                 Text("The school GPA scale is unavailable for this course.").font(.caption).foregroundStyle(.secondary)
             }
-            Text("Each task contributes its own percentage. Categories use SchoolPal weights. Existing item counts may be estimated.")
-                .font(.caption).foregroundStyle(.secondary)
+            if grades.averagesItems { Text("Each task contributes its own percentage. Categories use SchoolPal weights. Existing item counts may be estimated.").font(.caption).foregroundStyle(.secondary) }
         } else {
-            Text("Enter a score from zero to the maximum for each task and fill in any required item counts.")
+            Text("Check each score, maximum, and count (1–200), including any required existing item counts.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

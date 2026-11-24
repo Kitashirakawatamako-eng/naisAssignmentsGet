@@ -7,6 +7,8 @@ struct GPAWindow: View {
     @Environment(\.locale) private var locale
     @AppStorage("gradePreferences") private var saved = Data()
     @State private var selectedCourse: String?
+    @State private var mixedScores = true
+    @State private var useCredits = false
     @State private var category: String?
     @State private var target = "90"
     @State private var maximum = "100"
@@ -128,9 +130,13 @@ struct GPAWindow: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             courseSummary(course, data)
-                            taskImpact(course)
                             DisclosureGroup("Reverse-calculate a course goal") {
-                                scenario(data, group: selected, groups: groups)
+                                Picker("Score entry", selection: $mixedScores) {
+                                    Text("Mixed tasks").tag(true)
+                                    Text("Repeated score").tag(false)
+                                }.pickerStyle(.segmented)
+                                if !mixedScores { scenario(data, group: selected, groups: groups) }
+                                taskImpact(course, grades: data, group: selected)
                             }
                             DisclosureGroup("Semester and cumulative GPA estimates") {
                                 overall(course, data: data, group: selected)
@@ -211,10 +217,28 @@ struct GPAWindow: View {
         }
     }
 
-    private func taskImpact(_ course: String) -> some View {
+    private func semesterImpact(course: String, newPoints: Double) -> String? {
+        let schools = schoolCourseByID
+        let included = courses.filter { eligibleForGPA($0.id) }
+        guard included.contains(where: { $0.id == course }) else { return nil }
+        var before = GPACreditTotal()
+        var after = GPACreditTotal()
+        for entry in included {
+            let rule = rule(for: entry.id)
+            let points = schools[entry.id]?.points ?? grades(for: entry.id).percent().flatMap {
+                GPAScale(preferences.scale)?.points(at: $0).map { $0 + (GradePoints.number(rule.bonus) ?? 0) }
+            }
+            guard let points, let credits = useCredits ? GradePoints.number(rule.credits) : 1, credits > 0 else { return nil }
+            before.add(points: points, credits: credits)
+            after.add(points: entry.id == course ? newPoints : points, credits: credits)
+        }
+        guard let old = before.average, let new = after.average else { return nil }
+        return String(format: "%.2f → %.2f (%+.2f)", old, new, new - old)
+    }
+
+    private func taskImpact(_ course: String, grades: CourseGrades, group: String) -> some View {
         let key = ruleKey(course)
         let school = schoolCourseByID[course]
-        let data = school.flatMap { CourseGrades(school: $0, rule: rule(for: course)) }
         let rows = Binding<[PlannedGrade]>(
             get: { preferences.courseScenarios?[key] ?? [] },
             set: { items in
@@ -226,7 +250,17 @@ struct GPAWindow: View {
             }
         )
         return GradeSection {
-            CourseTaskImpactEditor(courseID: course, school: school, grades: data, items: rows).id(key)
+            if mixedScores { input("Target %", text: $target).frame(maxWidth: 150) }
+            Picker("Semester forecast weights", selection: $useCredits) {
+                Text("Equal course weights").tag(false)
+                Text("Course credits").tag(true)
+            }.pickerStyle(.segmented)
+            if useCredits { Button("Course Credits…") { creditsOpen = true }.buttonStyle(.link) }
+            let repeated = PlannedGrade(course: course, category: group, maximum: maximum, expected: expected, repetitions: count)
+            CourseTaskImpactEditor(courseID: course, school: school, grades: grades,
+                                   items: mixedScores ? rows : .constant([repeated]), editable: mixedScores,
+                                   target: GradePoints.number(target), fallbackScale: GPAScale(preferences.scale),
+                                   semesterImpact: { semesterImpact(course: course, newPoints: $0) }).id(key)
         }
     }
 

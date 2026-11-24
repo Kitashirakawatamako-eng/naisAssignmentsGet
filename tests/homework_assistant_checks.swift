@@ -176,6 +176,17 @@ import Foundation
         assert(near(combined.categories[1].after, 89.83333333333333))
         assert(near(combined.coursePercent, 91.63333333333333))
         assert(school.scale?.points(at: combined.coursePercent) == 4)
+        let quizzes = [7, 9].map { PlannedGrade(course: "c", category: "Exam", maximum: "10", expected: String($0)) }
+        let homework = [60, 70, 80, 90, 100].map { PlannedGrade(course: "c", category: "Work", expected: String($0)) }
+        let mixed = reconciled.impact(of: quizzes + homework, assumedCounts: ["Exam": 2])!
+        assert(near(mixed.categories[0].after, 85.75))
+        assert(near(mixed.categories[1].after, 744.0 / 9))
+        var repeated = work
+        repeated.repetitions = "3"
+        assert(near(reconciled.impact(of: [repeated])?.coursePercent,
+                    reconciled.impact(of: [work, work, work])!.coursePercent))
+        repeated.repetitions = "0"
+        assert(reconciled.impact(of: [repeated]) == nil)
         let missing = PlannedGrade(course: "c", category: "Work", maximum: "10", expected: "0")
         assert(near(reconciled.impact(of: [missing])?.categories.first?.after, 68.8))
         let invalid = PlannedGrade(course: "c", category: "Manual label", maximum: "10", expected: "9")
