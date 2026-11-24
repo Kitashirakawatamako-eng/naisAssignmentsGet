@@ -579,6 +579,7 @@ final class AssignmentStore: ObservableObject {
                                   attributes: [.posixPermissions: 0o700])
         var environment = ProcessInfo.processInfo.environment
         environment["SP_ASSIGNMENTS_HOME"] = root.path
+        environment["SP_ASSIGNMENTS_ACCOUNT"] = Accounts.activeID
         environment["SP_ASSIGNMENTS_MODEL_DIR"] = resources.appendingPathComponent("Models/en-zh").path
         environment["SSL_CERT_FILE"] = runtime.appendingPathComponent("lib/python3.13/site-packages/certifi/cacert.pem").path
         let child = Process()

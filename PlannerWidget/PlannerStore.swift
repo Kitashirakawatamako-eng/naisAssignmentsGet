@@ -146,8 +146,12 @@ final class PlannerStore: ObservableObject {
         else { editor = .occurrence(entry) }
     }
     func importSchool() {
-        let report = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/作业速览/reports/latest.json")
+        let base = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/作业速览", isDirectory: true)
+        let active = (try? Data(contentsOf: base.appendingPathComponent("accounts.json")))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["active"] as? String
+        let report = (active.map { base.appendingPathComponent("Users/\($0)/reports/latest.json") }
+            ?? base.appendingPathComponent("reports/latest.json"))
         do {
             let added = try PlanLogic.importReport(Data(contentsOf: report), into: &data)
             translateScheduleToEnglish()

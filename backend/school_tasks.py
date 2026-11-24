@@ -35,6 +35,7 @@ from task_records import task_metadata
 DEFAULT_HOME = Path.home() / "Library/Application Support/作业速览"
 ROOT = Path(os.environ.get("SP_ASSIGNMENTS_HOME") or DEFAULT_HOME).resolve()
 BASE = "https://naisstu.schoolis.cn"
+SCHOOL_HOST = urllib.parse.urlsplit(BASE).netloc
 URL = BASE + "/Home#!/task/list/"
 LOGIN_URL = BASE + "/login"
 TZ = ZoneInfo("Asia/Shanghai")
@@ -312,8 +313,14 @@ class Client:
         return unwrap(self._json_request(path, params))
 
     def _json_request(self, path, params, *, body=None, referer=URL, retry_read=False):
+        # Only the school host may receive requests. Absolute URLs and protocol tricks are refused
+        # before any socket is opened, so the app cannot post user data anywhere else.
+        if not path.startswith("/") or path.startswith("//"):
+            raise SyncError("已阻止向学校以外的地址发送请求。")
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
         url = BASE + path + ("?" + query if query else "")
+        if urllib.parse.urlsplit(url).netloc.lower() != SCHOOL_HOST:
+            raise SyncError("已阻止向学校以外的地址发送请求。")
         headers = {"Accept": "application/json", "Referer": referer}
         data = None
         readonly = body is None or retry_read

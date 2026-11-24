@@ -31,6 +31,16 @@ struct WidgetSnapshot: Codable {
 
     static func file(in root: URL) -> URL { root.appendingPathComponent("data/widgets.json") }
 
+    /// Widgets read the active account folder so one account never shows another's data.
+    static func activeRoot() -> URL {
+        guard let home = FileManager.default.homeDirectoryForCurrentUser as URL? else { return URL(fileURLWithPath: NSHomeDirectory()) }
+        let base = home.appendingPathComponent("Library/Application Support/作业速览", isDirectory: true)
+        guard let data = try? Data(contentsOf: base.appendingPathComponent("accounts.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = object["active"] as? String, !id.isEmpty else { return base }
+        return base.appendingPathComponent("Users", isDirectory: true).appendingPathComponent(id, isDirectory: true)
+    }
+
     func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
