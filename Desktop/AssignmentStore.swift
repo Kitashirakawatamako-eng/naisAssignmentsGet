@@ -37,6 +37,18 @@ final class AssignmentStore: ObservableObject {
     @Published private(set) var filterPins: Set<String> {
         didSet { defaults.set(filterPins.sorted(), forKey: "pinnedAssignmentsFiltered") }
     }
+    @Published private(set) var inProgressID: String? {
+        didSet { defaults.set(inProgressID, forKey: "workInProgressID") }
+    }
+    @Published private(set) var submissionRevision = 0
+    @Published private(set) var dropNotice: String?
+    @Published var watchDownloads: Bool {
+        didSet {
+            defaults.set(watchDownloads, forKey: "watchDownloadsForAirDrop")
+            configureInbox()
+        }
+    }
+    private let inbox = DropInbox()
     @Published var selectedID: String?
     @Published var settingsOpen = false
     @Published var schoolLoginOpen = false
@@ -96,11 +108,14 @@ final class AssignmentStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: "pinnedAssignments")
         }
         globalPins = globals
+        inProgressID = UserDefaults.standard.string(forKey: "workInProgressID")
+        watchDownloads = UserDefaults.standard.object(forKey: "watchDownloadsForAirDrop") as? Bool ?? false
         if let cached = try? Data(contentsOf: root.appendingPathComponent("data/timetable.json")) {
             snapshot.timetable = try? Self.backendDecoder().decode(Timetable.self, from: cached)
             snapshot.timetable?.courses.removeAll { !CourseVisibility.includes($0.title) }
         }
         syncWidgetMirror()
+        configureInbox()
     }
 
     var rows: [Assignment] { filters.apply(to: snapshot.tasks, now: now) }
@@ -564,6 +579,123 @@ final class AssignmentStore: ObservableObject {
         } else if files.fileExists(atPath: mirror.path) {
             try? files.removeItem(at: mirror)
         }
+    }
+
+    var downloadsFolder: URL {
+        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
+    }
+
+    var inProgressTask: Assignment? { snapshot.tasks.first { $0.id == inProgressID } }
+
+    func isInProgress(_ id: String) -> Bool { inProgressID == id }
+
+    func setInProgress(_ id: String?) {
+        inProgressID = id
+        if id == nil { dropNotice = nil }
+    }
+
+    func submissionFolder(_ id: String) -> URL {
+        root.appendingPathComponent("data/submissions/\(id)", isDirectory: true)
+    }
+
+    func submissionFiles(_ id: String) -> [URL] {
+        let folder = submissionFolder(id)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names.filter { !$0.hasPrefix(".") }.sorted().map { folder.appendingPathComponent($0) }
+    }
+
+    @discardableResult
+    func addSubmissionFiles(_ urls: [URL], to id: String) -> (added: Int, skipped: Int) {
+        let folder = submissionFolder(id)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        var added = 0, skipped = 0
+        for url in urls {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true,
+                  let size = values.fileSize, size > 0, size <= 100_000_000 else { skipped += 1; continue }
+            let raw = url.lastPathComponent.replacingOccurrences(of: "/", with: "-")
+            let name = raw.isEmpty ? "File" : raw
+            var target = folder.appendingPathComponent(name)
+            var index = 2
+            while FileManager.default.fileExists(atPath: target.path) {
+                let base = (name as NSString).deletingPathExtension
+                let ext = (name as NSString).pathExtension
+                target = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(index)" : "\(base) \(index).\(ext)")
+                index += 1
+            }
+            do {
+                try FileManager.default.copyItem(at: url, to: target)
+                added += 1
+            } catch { skipped += 1 }
+        }
+        if added > 0 { submissionRevision += 1 }
+        return (added, skipped)
+    }
+
+    func removeSubmissionFile(_ url: URL, from id: String) {
+        try? FileManager.default.removeItem(at: url)
+        submissionRevision += 1
+    }
+
+    func revealSubmissionFolder(_ id: String) {
+        let folder = submissionFolder(id)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
+    }
+
+    func chooseSubmissionFiles(for id: String) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose files to stage for this assignment"
+        panel.begin { [weak self] response in
+            guard response == .OK, let self else { return }
+            let result = self.addSubmissionFiles(panel.urls, to: id)
+            if result.skipped > 0 {
+                self.dropNotice = "Added \(result.added), skipped \(result.skipped) unsupported files."
+            }
+        }
+    }
+
+    func dropFiles(_ providers: [NSItemProvider], for id: String) {
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var urls: [URL] = []
+        for provider in providers {
+            guard provider.canLoadObject(ofClass: URL.self) else { continue }
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url {
+                    lock.lock(); urls.append(url); lock.unlock()
+                }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { [weak self] in
+            guard let self, !urls.isEmpty else { return }
+            let result = self.addSubmissionFiles(urls, to: id)
+            if result.skipped > 0 {
+                self.dropNotice = "Added \(result.added), skipped \(result.skipped) unsupported files."
+            }
+        }
+    }
+
+    private func configureInbox() {
+        inbox.onNewFiles = { [weak self] urls in
+            guard let self else { return }
+            guard let id = self.inProgressID else {
+                self.dropNotice = "Received \(urls.count) file(s). Mark an assignment as in progress to collect them."
+                return
+            }
+            let result = self.addSubmissionFiles(urls, to: id)
+            self.dropNotice = result.skipped > 0
+                ? "Added \(result.added) file(s), skipped \(result.skipped)."
+                : "Added \(result.added) file(s) to the assignment you are writing."
+        }
+        inbox.setEnabled(watchDownloads, folder: downloadsFolder)
     }
 
     private func widgetGPA() -> WidgetGPA {
