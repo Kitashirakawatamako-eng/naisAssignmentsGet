@@ -18,33 +18,58 @@ enum PageImages {
         var items: [Item] = []
         for file in files {
             let values = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-            guard values.isRegularFile == true, (values.fileSize ?? Int.max) <= 40_000_000 else {
-                throw AssistantError.message("Each attachment must be a regular file smaller than 40 MB.")
+            guard values.isRegularFile == true, (values.fileSize ?? Int.max) <= 60_000_000 else {
+                throw AssistantError.message("Each attachment must be a regular file smaller than 60 MB.")
             }
-            switch file.pathExtension.lowercased() {
+            let ext = file.pathExtension.lowercased()
+            switch ext {
             case "pdf":
-                guard let document = PDFDocument(url: file) else {
-                    throw AssistantError.message("Could not open \(file.lastPathComponent).")
-                }
-                guard document.pageCount > 0 else { throw AssistantError.message("This PDF has no pages.") }
-                for index in 0..<document.pageCount {
-                    guard items.count < maxPages else { break }
-                    if let page = document.page(at: index), let pageData = render(page) {
-                        items.append(.image(pageData, "image/jpeg"))
-                    }
-                }
+                items += try pages(of: file, limit: maxPages - items.count)
             case "png", "jpg", "jpeg", "webp", "heic", "gif", "tiff":
                 guard let image = NSImage(contentsOf: file), let data = jpeg(image) else {
                     throw AssistantError.message("Could not read \(file.lastPathComponent).")
                 }
                 items.append(.image(data, "image/jpeg"))
+            case "pptx", "docx", "xlsx", "ppt", "doc", "xls":
+                items += try officeItems(file, ext: ext, room: maxPages - items.count)
             default:
                 items.append(.text(try DocumentText.extract(file)))
             }
             if items.count >= maxPages { break }
         }
         guard !items.isEmpty else { throw AssistantError.message("Add at least one attachment.") }
-        return items
+        return Array(items.prefix(maxPages))
+    }
+
+    /// Office files become page images when LibreOffice is installed; slides otherwise fall back
+    /// to their embedded pictures plus extracted text.
+    private static func officeItems(_ file: URL, ext: String, room: Int) throws -> [Item] {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("sp-pages-" + UUID().uuidString)
+        try? FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        if let pdf = try OfficeRender.pdf(from: file, in: temporary) {
+            return try pages(of: pdf, limit: room)
+        }
+        if ext == "pptx" || ext == "ppt" {
+            var result: [Item] = [.text(try DocumentText.extract(file))]
+            for image in try OfficeRender.slideImages(file, in: temporary) {
+                guard result.count < room, let source = NSImage(contentsOf: image), let data = jpeg(source) else { continue }
+                result.append(.image(data, "image/jpeg"))
+            }
+            return result
+        }
+        return [.text(try DocumentText.extract(file))]
+    }
+
+    private static func pages(of file: URL, limit: Int) throws -> [Item] {
+        guard limit > 0, let document = PDFDocument(url: file) else { return [] }
+        var result: [Item] = []
+        for index in 0..<document.pageCount where result.count < limit {
+            if let page = document.page(at: index), let pageData = render(page) {
+                result.append(.image(pageData, "image/jpeg"))
+            }
+        }
+        return result
     }
 
     static func batches(_ items: [Item]) -> [[Item]] {
