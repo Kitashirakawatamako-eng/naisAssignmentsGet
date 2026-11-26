@@ -42,8 +42,14 @@ final class AssignmentStore: ObservableObject {
     }
     @Published private(set) var submissionRevision = 0
     @Published private(set) var dropNotice: String?
+    struct SubmitNotice: Equatable {
+        let text: String
+        let ok: Bool
+    }
     @Published private(set) var submitting = false
-    @Published private(set) var submitNotice: String?
+    @Published private(set) var submitNotices: [String: SubmitNotice] = [:]
+    @Published private(set) var dropNoticeTask: String?
+    private var pendingSubmitID: String?
     @Published var watchDownloads: Bool {
         didSet {
             defaults.set(watchDownloads, forKey: "watchDownloadsForAirDrop")
@@ -598,6 +604,7 @@ final class AssignmentStore: ObservableObject {
         // Marking work turns collection on unless the user has turned it off before.
         if id != nil, defaults.object(forKey: "watchDownloadsForAirDrop") == nil {
             watchDownloads = true
+            dropNoticeTask = id
             dropNotice = "AirDropped files in Downloads will join this assignment."
         }
     }
@@ -670,19 +677,24 @@ final class AssignmentStore: ObservableObject {
     func submitToSchool(_ task: Assignment, remark: String = "") {
         let files = submissionFiles(task.id)
         guard !files.isEmpty else {
-            submitNotice = "Add at least one file before submitting."
+            submitNotices[task.id] = SubmitNotice(text: "Add at least one file before submitting.", ok: false)
             return
         }
         guard !submitting else { return }
         if process == nil {
-            do { try connect() } catch { submitNotice = error.localizedDescription; return }
+            do { try connect() } catch {
+                submitNotices[task.id] = SubmitNotice(text: error.localizedDescription, ok: false)
+                return
+            }
         }
         submitting = true
-        submitNotice = nil
+        pendingSubmitID = task.id
+        submitNotices[task.id] = nil
         let relative = files.map { $0.path.replacingOccurrences(of: root.path + "/", with: "") }
         if !send(["action": "submit", "task": task.id, "files": relative, "remark": remark]) {
             submitting = false
-            submitNotice = "The sync service stopped. Try again."
+            pendingSubmitID = nil
+            submitNotices[task.id] = SubmitNotice(text: "The sync service stopped. Try again.", ok: false)
         }
     }
 
@@ -720,9 +732,11 @@ final class AssignmentStore: ObservableObject {
             guard let self else { return }
             guard let id = self.inProgressID else {
                 self.dropNotice = "Received \(urls.count) file(s). Mark an assignment as in progress to collect them."
+                self.dropNoticeTask = nil
                 return
             }
             let result = self.addSubmissionFiles(urls, to: id)
+            self.dropNoticeTask = id
             self.dropNotice = result.skipped > 0
                 ? "Added \(result.added) file(s), skipped \(result.skipped)."
                 : "Added \(result.added) file(s) to the assignment you are writing."
@@ -886,8 +900,12 @@ final class AssignmentStore: ObservableObject {
                 }
             } else if event.operation == "submit" {
                 submitting = false
-                submitNotice = event.error ?? "Submitted to the school."
-                if event.error == nil { submissionRevision += 1 }
+                if let id = pendingSubmitID {
+                    let ok = event.error == nil
+                    submitNotices[id] = SubmitNotice(text: event.error ?? "Submitted to the school.", ok: ok)
+                    if ok { submissionRevision += 1 }
+                }
+                pendingSubmitID = nil
             } else if event.operation == "grades" || event.operation == "import-grade-dump" {
                 gradeIssue = event.error
             } else if let error = event.error {

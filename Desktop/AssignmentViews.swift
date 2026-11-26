@@ -432,7 +432,7 @@ private struct TaskDetail: View {
                 Text(store.downloadsFolder.path)
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
-            if let notice = store.dropNotice {
+            if let notice = store.dropNotice, store.dropNoticeTask == task.id {
                 Text(LocalizedStringKey(notice)).font(.caption).foregroundStyle(jade)
             }
             if files.isEmpty {
@@ -464,9 +464,9 @@ private struct TaskDetail: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(files.isEmpty || store.submitting)
             }
-            if let notice = store.submitNotice {
-                Text(LocalizedStringKey(notice)).font(.caption)
-                    .foregroundStyle(notice.hasPrefix("Submitted") ? jade : .orange)
+            if let notice = store.submitNotices[task.id] {
+                Text(LocalizedStringKey(notice.text)).font(.caption)
+                    .foregroundStyle(notice.ok ? jade : .orange)
             }
             Button("Open School Submission Page") { store.open(schoolURL) }.buttonStyle(.link)
         }
