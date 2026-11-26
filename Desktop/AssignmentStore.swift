@@ -100,6 +100,7 @@ final class AssignmentStore: ObservableObject {
             snapshot.timetable = try? Self.backendDecoder().decode(Timetable.self, from: cached)
             snapshot.timetable?.courses.removeAll { !CourseVisibility.includes($0.title) }
         }
+        syncWidgetMirror()
     }
 
     var rows: [Assignment] { filters.apply(to: snapshot.tasks, now: now) }
@@ -535,11 +536,33 @@ final class AssignmentStore: ObservableObject {
                 try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                         attributes: [.posixPermissions: 0o700])
                 try encoded.write(to: path, options: .atomic)
+                // The widget extension is sandboxed and may only read the fixed mirror path,
+                // so the active account's snapshot is copied there on every publish.
+                let mirror = Self.widgetMirror
+                try? FileManager.default.createDirectory(at: mirror.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? encoded.write(to: mirror, options: .atomic)
                 WidgetCenter.shared.reloadAllTimelines()
             }
             publishedWidgetData = encoded
         } catch {
             // Keep the last readable widget snapshot and retry on the next pulse.
+        }
+    }
+
+    static var widgetMirror: URL {
+        Accounts.base.appendingPathComponent("data/widgets.json")
+    }
+
+    /// Keep the sandbox-readable mirror in step with the active account at launch.
+    private func syncWidgetMirror() {
+        let files = FileManager.default
+        let source = WidgetSnapshot.file(in: root)
+        let mirror = Self.widgetMirror
+        if let data = try? Data(contentsOf: source) {
+            try? files.createDirectory(at: mirror.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: mirror, options: .atomic)
+        } else if files.fileExists(atPath: mirror.path) {
+            try? files.removeItem(at: mirror)
         }
     }
 
