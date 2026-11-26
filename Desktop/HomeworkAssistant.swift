@@ -543,14 +543,11 @@ struct HomeworkAIPanel: View {
                 if let error = assistant.error { Text(LocalizedStringKey(error)).foregroundStyle(.orange).textSelection(.enabled) }
                 if let url = assistant.resultURL {
                     Divider()
-                    ScrollView {
-                        Text(assistant.resultText)
-                            .font(.callout).textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(height: 240)
-                    .padding(8)
-                    .background(panel, in: RoundedRectangle(cornerRadius: 8))
+                    MarkdownView(markdown: assistant.resultText)
+                        .frame(height: 260)
+                        .background(panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.18)))
                     HStack(spacing: 10) {
                         Button("Export…") { assistant.export() }
                         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
