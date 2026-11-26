@@ -166,7 +166,7 @@ struct AssignmentWindow: View {
     }
 
     private func assignmentRow(_ task: Assignment) -> some View {
-        TaskListRow(task: task, now: store.now, pin: store.pinState(task.id))
+        TaskListRow(task: task, now: store.now, pin: store.pinState(task.id), writing: store.isInProgress(task.id))
             .tag(task.id)
             .listRowInsets(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
             .accessibilityElement(children: .combine)
@@ -255,6 +255,7 @@ private struct TaskListRow: View {
     let task: Assignment
     let now: Date
     var pin: AssignmentStore.PinScope? = nil
+    var writing = false
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
@@ -266,6 +267,12 @@ private struct TaskListRow: View {
                             .font(.system(size: 9))
                             .foregroundStyle(prominence == .increased ? Color.white : jade)
                             .help(pin == .global ? "Pin Globally" : "Pin in Filtered Results")
+                    }
+                    if writing {
+                        Image(systemName: "pencil.line")
+                            .font(.system(size: 9))
+                            .foregroundStyle(prominence == .increased ? Color.white : jade)
+                            .help("You are writing this assignment")
                     }
                     let status = Text(LocalizedStringKey(task.statusLabel))
                     Text("\(task.subject) · \(status)")
@@ -310,6 +317,7 @@ private struct TaskDetail: View {
     let task: Assignment
     @ObservedObject var store: AssignmentStore
     @State private var showOriginal = false
+    @State private var confirmSubmit = false
 
     var body: some View {
         ScrollView {
@@ -383,6 +391,7 @@ private struct TaskDetail: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 8)
                 }
+                submissionSection(task)
                 Divider()
                 Button { store.open(schoolURL) } label: {
                     Label("Open School Task List", systemImage: "arrow.up.right")
@@ -395,6 +404,78 @@ private struct TaskDetail: View {
             .padding(22)
         }
         .accessibilityLabel("Assignment Details")
+        .alert("Submit this assignment?", isPresented: $confirmSubmit) {
+            Button("Cancel", role: .cancel) {}
+            Button("Submit") { store.submitToSchool(task) }
+        } message: {
+            Text("The staged files are uploaded to the school and the task is submitted right away. This cannot be undone from the app.")
+        }
+    }
+
+    @ViewBuilder
+    private func submissionSection(_ task: Assignment) -> some View {
+        let working = store.isInProgress(task.id)
+        let files = store.submissionFiles(task.id)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Submission").font(.headline)
+                Spacer()
+                Toggle("Writing this now", isOn: Binding(get: { working }, set: { store.setInProgress($0 ? task.id : nil) }))
+                    .toggleStyle(.switch)
+            }
+            Text("Files stay on this Mac until you submit.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Toggle("Auto-collect AirDrops", isOn: $store.watchDownloads)
+                    .toggleStyle(.switch).controlSize(.mini)
+                    .font(.caption)
+                Text(store.downloadsFolder.path)
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            if let notice = store.dropNotice, store.dropNoticeTask == task.id {
+                Text(LocalizedStringKey(notice)).font(.caption).foregroundStyle(jade)
+            }
+            if files.isEmpty {
+                Text("No files yet. Drop them here or use Add Files.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(files, id: \.self) { url in
+                    HStack(spacing: 7) {
+                        Image(systemName: "doc").foregroundStyle(.secondary)
+                        Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Text(ByteCountFormatter.string(fromByteCount: Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0), countStyle: .file))
+                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        Button { store.removeSubmissionFile(url, from: task.id) } label: {
+                            Image(systemName: "xmark.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Remove from this assignment")
+                    }
+                }
+            }
+            HStack(spacing: 10) {
+                Button("Add Files…") { store.chooseSubmissionFiles(for: task.id) }
+                Button("Reveal Folder") { store.revealSubmissionFolder(task.id) }.disabled(files.isEmpty)
+                Spacer()
+                if store.submitting {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Submit to School") { confirmSubmit = true }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(files.isEmpty || store.submitting)
+            }
+            if let notice = store.submitNotices[task.id] {
+                Text(LocalizedStringKey(notice.text)).font(.caption)
+                    .foregroundStyle(notice.ok ? jade : .orange)
+            }
+            Button("Open School Submission Page") { store.open(schoolURL) }.buttonStyle(.link)
+        }
+        .padding(12)
+        .background(panel, in: RoundedRectangle(cornerRadius: 10))
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            store.dropFiles(providers, for: task.id)
+            return true
+        }
     }
 
     private func field(_ name: LocalizedStringKey, _ value: String?, overdue: Bool = false) -> some View {
@@ -534,6 +615,13 @@ struct AssignmentSettings: View {
             AppearanceSettings()
             Divider()
             DesktopWidgetSettings(store: store)
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Collect AirDropped files", isOn: $store.watchDownloads).toggleStyle(.switch)
+                Text("While an assignment is marked as being written, new files in \(store.downloadsFolder.path) are copied into that assignment's submission folder. Files stay on this Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Divider()
             VStack(alignment: .leading, spacing: 7) {
                 Label("Attachment Folder", systemImage: "folder").font(.headline)

@@ -107,6 +107,26 @@ struct GPAWindow: View {
             .padding(.horizontal, 22).padding(.vertical, 16)
             .background(headerDecoration)
             Divider()
+            if !offline, let dynamic, let gpa = dynamic.gpa {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(dynamic.archived ? "Archived GPA" : "Dynamic GPA")
+                            .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                        if let checked = Beijing.parse(dynamic.checkedAt) {
+                            Text(dynamic.fromDump == true ? "Captured \(Beijing.dateTime(checked))" : "Updated \(Beijing.dateTime(checked))")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(verbatim: gpaText(gpa))
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .monospacedDigit().foregroundStyle(jade)
+                    Spacer()
+                }
+                .padding(.horizontal, 22).padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(jade.opacity(0.06))
+                Divider()
+            }
             if let issue = importIssue ?? (offline ? nil : store.gradeIssue ?? book?.syncIssue), store.working != "grades" {
                 Label(LocalizedStringKey(issue), systemImage: "exclamationmark.circle")
                     .foregroundStyle(.orange).frame(maxWidth: .infinity, alignment: .leading).padding(12)
@@ -246,6 +266,12 @@ struct GPAWindow: View {
                             ?? publishedScore(course.id) ?? "—"
                         Text(verbatim: display)
                             .monospacedDigit().foregroundStyle(.secondary)
+                        if let points = published[course.id]?.points {
+                            Text(verbatim: gpaText(points))
+                                .font(.caption.weight(.semibold)).monospacedDigit()
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(jade.opacity(0.14), in: Capsule())
+                        }
                     }
                     .tag(course.id)
                 }

@@ -13,6 +13,7 @@ from html.parser import HTMLParser
 import http.cookiejar
 import http.client
 import json
+import mimetypes
 import os
 from pathlib import Path
 from queue import Full, Queue
@@ -24,6 +25,7 @@ import tempfile
 from threading import Lock, Thread
 import time
 import urllib.error
+import uuid
 import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
@@ -249,6 +251,9 @@ def unwrap(value):
     if value["state"] in (999902, 999903):
         raise SyncError("学校账号没有查看该数据的权限。")
     if value["state"] != 0:
+        detail = (value.get("msgCN") or value.get("msg") or "").strip()
+        if detail and "Myth.ErrorException" not in detail:
+            raise SyncError(f"学校接口错误（state={value['state']}）：{detail}")
         raise SyncError(f"学校接口错误（state={value['state']}），未更新本地同步记录。")
     return value.get("data")
 
@@ -384,6 +389,27 @@ class Client:
         return [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path,
                  "secure": c.secure, "expires": c.expires if c.expires is not None else -1}
                 for c in self.jar if not c.is_expired()]
+
+    def upload(self, path, file):
+        """POST one file as multipart/form-data, matching the student site's upload field."""
+        file = Path(file)
+        boundary = "----spassignments" + uuid.uuid4().hex
+        mime = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+        head = (f'--{boundary}\r\nContent-Disposition: form-data; name="fileBase"; filename="{file.name}"\r\n'
+                f"Content-Type: {mime}\r\n\r\n").encode()
+        tail = f"\r\n--{boundary}--\r\n".encode()
+        body = head + file.read_bytes() + tail
+        url = BASE + path
+        if urllib.parse.urlsplit(url).netloc.lower() != SCHOOL_HOST:
+            raise SyncError("已阻止向学校以外的地址发送请求。")
+        request = urllib.request.Request(url, data=body, method="POST", headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json", "Referer": URL})
+        with self.opener.open(request, timeout=180) as response:
+            raw = response.read(4 * 1024 * 1024)
+            if not school_origin(response.url):
+                raise LoginRequired("学校网站返回了登录页。")
+        return unwrap(json.loads(raw))
 
     def download(self, url, target):
         url = urllib.parse.urljoin(BASE, url)
