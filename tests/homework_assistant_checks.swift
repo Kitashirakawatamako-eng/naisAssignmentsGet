@@ -33,7 +33,7 @@ import Foundation
         assert(attachment["mime_type"] as? String == "image/jpeg")
         assert(Data(base64Encoded: attachment["data"] as! String) == Data([1,2,3]))
         let pages = (0..<9).map { _ in PageImages.Item.image(Data([1]), "image/jpeg") }
-        assert(PageImages.batches(pages).map(\.count) == [4, 4, 1])
+        assert(PageImages.batches(pages).map(\.count) == [4, 4, 3])
         for (name, data) in [("questions.zip", Data([1,2])), ("broken.docx", Data([1,2])), ("huge.pdf", Data(repeating:0, count:10_000_001))] {
             let bad = dir.appendingPathComponent(name); try data.write(to: bad)
             do { _ = try HomeworkAIRequest.content(title:"T",subject:"S",instructions:"I",files:[bad]); fatalError("Invalid file accepted") } catch is AssistantError {}

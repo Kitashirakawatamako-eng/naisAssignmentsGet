@@ -72,16 +72,17 @@ enum PageImages {
         return result
     }
 
+    /// Consecutive batches share one page, so a question that starts at the bottom of a page
+    /// still has its options in the next request.
     static func batches(_ items: [Item]) -> [[Item]] {
         var result: [[Item]] = []
-        var current: [Item] = []
-        for item in items {
-            current.append(item)
-            if current.count == pagesPerBatch {
-                result.append(current); current = []
-            }
+        var start = 0
+        while start < items.count {
+            let end = min(start + pagesPerBatch, items.count)
+            result.append(Array(items[start..<end]))
+            if end == items.count { break }
+            start = end - 1
         }
-        if !current.isEmpty { result.append(current) }
         return result
     }
 

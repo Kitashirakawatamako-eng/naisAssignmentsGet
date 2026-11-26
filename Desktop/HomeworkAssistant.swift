@@ -304,7 +304,7 @@ final class HomeworkAssistant: NSObject, ObservableObject, UNUserNotificationCen
                     progress = batches.count > 1 ? "\(index + 1)/\(batches.count)" : nil
                     var header = "Subject: \(assignment.subject)\nAssignment: \(assignment.originalTitle)\nInstructions:\n\(assignment.original)"
                     if batches.count > 1 {
-                        header += "\n\nThis is part \(index + 1) of \(batches.count) of the same assignment. Answer the questions visible in these pages only."
+                        header += "\n\nThis is part \(index + 1) of \(batches.count) of the same assignment. The first page here may repeat the last page of the previous part: use the repeat only to finish a question that continues across the page break, and do not answer it twice."
                     }
                     let parts = PageImages.parts(batch, header: header)
                     outputs.append(try await complete(provider: provider, key: key, system: systemPrompt, parts: parts))
@@ -543,13 +543,22 @@ struct HomeworkAIPanel: View {
                 if let error = assistant.error { Text(LocalizedStringKey(error)).foregroundStyle(.orange).textSelection(.enabled) }
                 if let url = assistant.resultURL {
                     Divider()
-                    Text(assistant.resultText)
-                        .font(.callout).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .background(panel, in: RoundedRectangle(cornerRadius: 8))
-                        .frame(height: 190)
-                    HStack { Button("Export…") { assistant.export() }; Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
+                    ScrollView {
+                        Text(assistant.resultText)
+                            .font(.callout).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 240)
+                    .padding(8)
+                    .background(panel, in: RoundedRectangle(cornerRadius: 8))
+                    HStack(spacing: 10) {
+                        Button("Export…") { assistant.export() }
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                        Spacer()
+                        if assistant.resultText.contains("\n---\n") {
+                            Text("Scroll for later parts").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 if !assistant.history.isEmpty {
                     DisclosureGroup("Saved drafts") {
