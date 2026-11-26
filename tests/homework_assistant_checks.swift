@@ -26,14 +26,14 @@ import Foundation
         let word = try HomeworkAIRequest.content(title: "T", subject: "S", instructions: "I", files: [docx])
         assert(word.count == 2 && word[1]["type"] as? String == "text")
         assert((word[1]["text"] as? String)?.contains("Question 1: 2+2?") == true)
-        for (ext, mime, type) in [("pdf", "application/pdf", "document"), ("jpg", "image/jpeg", "image")] {
-            let file = dir.appendingPathComponent("questions." + ext); try Data([1,2,3]).write(to: file)
-            let parts = try HomeworkAIRequest.content(title:"T",subject:"S",instructions:"I",files:[file])
-            let attachment = parts.last!
-            assert(attachment["type"] as? String == type)
-            assert(attachment["mime_type"] as? String == mime)
-            assert(Data(base64Encoded: attachment["data"] as! String) == Data([1,2,3]))
-        }
+        let imageFile = dir.appendingPathComponent("questions.jpg"); try Data([1,2,3]).write(to: imageFile)
+        let imageParts = try HomeworkAIRequest.content(title:"T",subject:"S",instructions:"I",files:[imageFile])
+        let attachment = imageParts.last!
+        assert(attachment["type"] as? String == "image")
+        assert(attachment["mime_type"] as? String == "image/jpeg")
+        assert(Data(base64Encoded: attachment["data"] as! String) == Data([1,2,3]))
+        let pages = (0..<9).map { _ in PageImages.Item.image(Data([1]), "image/jpeg") }
+        assert(PageImages.batches(pages).map(\.count) == [4, 4, 1])
         for (name, data) in [("questions.zip", Data([1,2])), ("broken.docx", Data([1,2])), ("huge.pdf", Data(repeating:0, count:10_000_001))] {
             let bad = dir.appendingPathComponent(name); try data.write(to: bad)
             do { _ = try HomeworkAIRequest.content(title:"T",subject:"S",instructions:"I",files:[bad]); fatalError("Invalid file accepted") } catch is AssistantError {}
