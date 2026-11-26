@@ -94,7 +94,9 @@ private struct WidgetProvider: TimelineProvider {
     }
 
     func readData() -> WidgetSnapshot? {
-        let root = WidgetSnapshot.activeRoot()
+        guard let home = getpwuid(getuid())?.pointee.pw_dir else { return nil }
+        let root = URL(fileURLWithPath: String(cString: home), isDirectory: true)
+            .appendingPathComponent("Library/Application Support/作业速览")
         if let data = try? Data(contentsOf: WidgetSnapshot.file(in: root)),
            let snapshot = try? WidgetSnapshot.decode(from: data) {
             return snapshot

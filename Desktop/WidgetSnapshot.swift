@@ -33,8 +33,9 @@ struct WidgetSnapshot: Codable {
 
     /// Widgets read the active account folder so one account never shows another's data.
     static func activeRoot() -> URL {
-        guard let home = FileManager.default.homeDirectoryForCurrentUser as URL? else { return URL(fileURLWithPath: NSHomeDirectory()) }
-        let base = home.appendingPathComponent("Library/Application Support/作业速览", isDirectory: true)
+        guard let home = getpwuid(getuid())?.pointee.pw_dir else { return URL(fileURLWithPath: NSHomeDirectory()) }
+        let base = URL(fileURLWithPath: String(cString: home), isDirectory: true)
+            .appendingPathComponent("Library/Application Support/作业速览", isDirectory: true)
         guard let data = try? Data(contentsOf: base.appendingPathComponent("accounts.json")),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let id = object["active"] as? String, !id.isEmpty else { return base }
