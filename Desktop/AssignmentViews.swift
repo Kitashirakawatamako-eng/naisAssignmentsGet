@@ -423,9 +423,16 @@ private struct TaskDetail: View {
                 Toggle("Writing this now", isOn: Binding(get: { working }, set: { store.setInProgress($0 ? task.id : nil) }))
                     .toggleStyle(.switch)
             }
-            Text("Files stay on this Mac until you submit. AirDropped files join automatically while this assignment is marked.")
+            Text("Files stay on this Mac until you submit.")
                 .font(.caption).foregroundStyle(.secondary)
-            if let notice = store.dropNotice, working {
+            HStack(spacing: 8) {
+                Toggle("Auto-collect AirDrops", isOn: $store.watchDownloads)
+                    .toggleStyle(.switch).controlSize(.mini)
+                    .font(.caption)
+                Text(store.downloadsFolder.path)
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            if let notice = store.dropNotice {
                 Text(LocalizedStringKey(notice)).font(.caption).foregroundStyle(jade)
             }
             if files.isEmpty {

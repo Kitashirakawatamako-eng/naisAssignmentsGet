@@ -595,6 +595,11 @@ final class AssignmentStore: ObservableObject {
     func setInProgress(_ id: String?) {
         inProgressID = id
         if id == nil { dropNotice = nil }
+        // Marking work turns collection on unless the user has turned it off before.
+        if id != nil, defaults.object(forKey: "watchDownloadsForAirDrop") == nil {
+            watchDownloads = true
+            dropNotice = "AirDropped files in Downloads will join this assignment."
+        }
     }
 
     func submissionFolder(_ id: String) -> URL {
@@ -705,6 +710,12 @@ final class AssignmentStore: ObservableObject {
     }
 
     private func configureInbox() {
+        if watchDownloads, (try? FileManager.default.contentsOfDirectory(
+            at: downloadsFolder, includingPropertiesForKeys: nil)) == nil {
+            dropNotice = "Cannot read the Downloads folder. Allow 作业速览 in System Settings → Privacy & Security → Files and Folders, then switch this on again."
+            inbox.setEnabled(false, folder: downloadsFolder)
+            return
+        }
         inbox.onNewFiles = { [weak self] urls in
             guard let self else { return }
             guard let id = self.inProgressID else {
