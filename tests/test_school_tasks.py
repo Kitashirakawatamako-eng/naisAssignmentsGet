@@ -2,6 +2,7 @@ import copy
 from datetime import datetime, timedelta
 from http.client import IncompleteRead
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -753,3 +754,27 @@ class SubmitTests(unittest.TestCase):
             self.assertEqual(body["remark"], "done")
             self.assertEqual(body["learningTaskStudentDocuments"][0]["type"], ".pdf")
             self.assertEqual(body["learningTaskStudentDocuments"][0]["id"], 0)
+
+
+class SubmitFormatTests(unittest.TestCase):
+    def test_unsupported_extension_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bad = Path(folder) / "notes.exe"
+            bad.write_bytes(b"x")
+            with self.assertRaises(school_submit.SubmitError):
+                school_submit.prepare([bad], folder)
+
+    def test_heic_is_converted_to_jpeg(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "photo.jpg"
+            source.write_bytes(b"jpeg")
+            subprocess.run(["/usr/bin/sips", "-s", "format", "jpeg", str(source), "--out", str(source)],
+                           capture_output=True, check=False)
+            heic = Path(folder) / "IMG_0001.heic"
+            made = subprocess.run(["/usr/bin/sips", "-s", "format", "heic", str(source), "--out", str(heic)],
+                                  capture_output=True, check=False)
+            if not heic.is_file():
+                self.skipTest("sips cannot write HEIC here")
+            prepared = school_submit.prepare([heic], folder)
+            self.assertEqual(prepared[0].suffix.lower(), ".jpg")
+            self.assertTrue(prepared[0].is_file())

@@ -251,6 +251,9 @@ def unwrap(value):
     if value["state"] in (999902, 999903):
         raise SyncError("学校账号没有查看该数据的权限。")
     if value["state"] != 0:
+        detail = (value.get("msgCN") or value.get("msg") or "").strip()
+        if detail and "Myth.ErrorException" not in detail:
+            raise SyncError(f"学校接口错误（state={value['state']}）：{detail}")
         raise SyncError(f"学校接口错误（state={value['state']}），未更新本地同步记录。")
     return value.get("data")
 
