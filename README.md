@@ -27,13 +27,13 @@
 - 在任务详情打开 **Submission → Writing this now**，把这一项标记为「正在写」。列表里会出现铅笔标记。
 - **Add Files…** 可一次选多个文件，也可以直接把文件拖进详情页。文件只复制到本机 `data/submissions/<任务>/`，不会上传。
 - 打开 **设置 → Collect AirDropped files** 后，标记期间新出现在「下载」里的文件（隔空投送默认落点）会自动加进当前作业。
-- 准备好后点 **Open School Submission Page** 到学校页面提交。应用不代你提交，也不会替你把文件送到学校。
+- 准备好后点 **Submit to School**：应用会先把文件上传到学校，再按学校的提交流程直接提交这份作业，成功后自动重新同步状态。确认框点取消就不会提交。
 
 ## 账号与隐私
 
 - **设置 → 学校账号** 可以添加多个账号。每个账号的登录会话、作业、成绩、附件和报告都保存在 `Users/<账号>/`，互相看不到；自动登录凭据在钥匙串里也按账号分开。切换账号会重启应用。
 - 应用运行时只请求 `naisstu.schoolis.cn`，附件只从 `*.schoolis.cn` 下载。后端会拒绝指向其他地址的请求，代码里没有遥测或统计上报。
-- 作业助手默认关闭。**设置 → AI 助手** 可选 Google Gemini，或任何兼容 OpenAI `/chat/completions` 的服务：填自己的 Base URL、模型名和 Key，密钥按提供商分别存在钥匙串。只有你点 **Yes — Generate Answers** 时，当次作业正文和所选文件才会发给你选的那家。
+- 作业助手默认关闭。**设置 → AI 助手** 可选 Google Gemini，或任何兼容 OpenAI `/chat/completions` 的服务：填自己的 Base URL、模型名和 Key，密钥按提供商分别存在钥匙串。PDF、DOCX、PPTX、XLSX、RTF 和纯文本会先在本地抽成文字，所以不支持 PDF 的服务也能读；图片按原图发送。只有你点 **Yes — Generate Answers** 时，当次作业正文和所选文件才会发给你选的那家。
 
 ## 本机文件
 

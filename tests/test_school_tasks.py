@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 import desktop_bridge
 import school_grades
+import school_submit
 import school_tasks as app
 from school_timetable import load_timetable, read_timetable
 from task_records import published_grade, task_metadata
@@ -727,3 +728,28 @@ class AccountIsolationTests(unittest.TestCase):
             os.environ.pop("SP_ASSIGNMENTS_ACCOUNT", None)
             importlib.reload(school_keychain)
         self.assertEqual(school_keychain.SERVICE, school_keychain.BASE_SERVICE)
+
+
+class SubmitTests(unittest.TestCase):
+    def test_submit_requires_files_and_task(self):
+        with self.assertRaises(school_submit.SubmitError):
+            school_submit.check("", ["a.txt"])
+        with self.assertRaises(school_submit.SubmitError):
+            school_submit.check("1", [])
+        with self.assertRaises(school_submit.SubmitError):
+            school_submit.check("1", ["/tmp/definitely-missing-file.txt"])
+
+    def test_submit_uploads_then_saves(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "answer.pdf"
+            path.write_bytes(b"%PDF-1.4 test")
+            client = MagicMock()
+            client._json_request.return_value = {"state": 0, "data": True}
+            with patch.object(school_submit.school, "unwrap", side_effect=lambda value: value.get("data")):
+                school_submit.submit(client, "1000001", [path], "done")
+            client.upload.assert_called_once()
+            body = client._json_request.call_args[1]["body"]
+            self.assertEqual(body["learningTaskId"], "1000001")
+            self.assertEqual(body["remark"], "done")
+            self.assertEqual(body["learningTaskStudentDocuments"][0]["type"], ".pdf")
+            self.assertEqual(body["learningTaskStudentDocuments"][0]["id"], 0)

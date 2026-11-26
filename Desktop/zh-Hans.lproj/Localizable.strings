@@ -498,3 +498,14 @@
 "Base URL" = "接口地址";
 "Model" = "模型";
 "API key" = "API 密钥";
+"Submit to School" = "提交到学校";
+"Submit this assignment?" = "现在提交这份作业？";
+"Submit" = "提交";
+"The staged files are uploaded to the school and the task is submitted right away. This cannot be undone from the app." = "暂存的文件会上传到学校并立即提交，应用内无法撤销。";
+"Submitted to the school." = "已提交到学校。";
+"Add at least one file before submitting." = "先添加文件再提交。";
+"Generate" = "生成";
+"Add…" = "添加…";
+"Attachments" = "附件";
+"Saved drafts" = "已保存草稿";
+" — not downloaded" = " — 未下载";

@@ -42,6 +42,8 @@ final class AssignmentStore: ObservableObject {
     }
     @Published private(set) var submissionRevision = 0
     @Published private(set) var dropNotice: String?
+    @Published private(set) var submitting = false
+    @Published private(set) var submitNotice: String?
     @Published var watchDownloads: Bool {
         didSet {
             defaults.set(watchDownloads, forKey: "watchDownloadsForAirDrop")
@@ -660,6 +662,25 @@ final class AssignmentStore: ObservableObject {
         }
     }
 
+    func submitToSchool(_ task: Assignment, remark: String = "") {
+        let files = submissionFiles(task.id)
+        guard !files.isEmpty else {
+            submitNotice = "Add at least one file before submitting."
+            return
+        }
+        guard !submitting else { return }
+        if process == nil {
+            do { try connect() } catch { submitNotice = error.localizedDescription; return }
+        }
+        submitting = true
+        submitNotice = nil
+        let relative = files.map { $0.path.replacingOccurrences(of: root.path + "/", with: "") }
+        if !send(["action": "submit", "task": task.id, "files": relative, "remark": remark]) {
+            submitting = false
+            submitNotice = "The sync service stopped. Try again."
+        }
+    }
+
     func dropFiles(_ providers: [NSItemProvider], for id: String) {
         let group = DispatchGroup()
         let lock = NSLock()
@@ -852,6 +873,10 @@ final class AssignmentStore: ObservableObject {
                     needsLogin = false
                     refreshAfterRequest = true
                 }
+            } else if event.operation == "submit" {
+                submitting = false
+                submitNotice = event.error ?? "Submitted to the school."
+                if event.error == nil { submissionRevision += 1 }
             } else if event.operation == "grades" || event.operation == "import-grade-dump" {
                 gradeIssue = event.error
             } else if let error = event.error {

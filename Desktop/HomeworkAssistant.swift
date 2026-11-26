@@ -59,43 +59,20 @@ enum HomeworkAIRequest {
         var result: [[String: Any]] = [["type": "text", "text": "Subject: \(subject)\nAssignment: \(title)\nInstructions:\n\(instructions)"]]
         var total = 0
         for file in files {
-            let size = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-            guard size.isRegularFile == true, (size.fileSize ?? Int.max) <= 10_000_000 else { throw AssistantError.message("Each attachment must be a regular file smaller than 10 MB.") }
-            let data = try Data(contentsOf: file); total += data.count
+            let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            total += size
             guard total <= 20_000_000 else { throw AssistantError.message("Choose at most 20 MB of attachments per request.") }
             let ext = file.pathExtension.lowercased()
-            if ["png", "jpg", "jpeg", "webp"].contains(ext) {
+            if ["png", "jpg", "jpeg", "webp", "gif", "heic"].contains(ext) {
                 let mime = ext == "jpg" ? "jpeg" : ext
+                let data = try Data(contentsOf: file)
                 result.append(["type": "image", "mime_type": "image/\(mime)", "data": data.base64EncodedString()])
-            } else if ext == "pdf" {
-                result.append(["type": "text", "text": "Attached file: \(file.lastPathComponent)"])
-                result.append(["type": "document", "mime_type": "application/pdf", "data": data.base64EncodedString()])
-            } else if ext == "docx" {
-                let text = try wordText(file)
-                total += max(0, text.utf8.count - data.count)
-                guard total <= 20_000_000 else { throw AssistantError.message("Choose at most 20 MB of attachments per request.") }
+            } else {
+                let text = try DocumentText.extract(file)
                 result.append(["type": "text", "text": "Attached file \(file.lastPathComponent):\n\(text)"])
-            } else if ["txt", "md", "csv"].contains(ext), let text = String(data: data, encoding: .utf8) {
-                result.append(["type": "text", "text": "Attached file \(file.lastPathComponent):\n\(text)"])
-            } else { throw AssistantError.message("Supported attachments: PDF, DOCX, PNG, JPG, WebP, UTF-8 TXT, MD, and CSV. Export other documents to PDF first.") }
+            }
         }
         return result
-    }
-    private static func wordText(_ file: URL) throws -> String {
-        let conversion = Process()
-        let output = Pipe()
-        conversion.executableURL = URL(fileURLWithPath: "/usr/bin/textutil")
-        conversion.arguments = ["-convert", "txt", "-stdout", "-format", "docx", file.path]
-        conversion.standardOutput = output
-        conversion.standardError = FileHandle.nullDevice
-        let failure = AssistantError.message("Could not read text from this DOCX. Export it to PDF if it contains images or diagrams.")
-        do { try conversion.run() } catch { throw failure }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        conversion.waitUntilExit()
-        guard conversion.terminationStatus == 0,
-              let text = String(data: data, encoding: .utf8),
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw failure }
-        return text
     }
     static func output(_ json: [String: Any]) throws -> String {
         guard json["status"] as? String == "completed" else { throw AssistantError.message("The AI response was incomplete. Try again or use a smaller assignment.") }
@@ -447,58 +424,104 @@ struct HomeworkAIPanel: View {
     @AppStorage("interfaceLanguage") private var language = "zh-Hans"
     @State private var files: [URL] = []
     var selected: Assignment? { store.snapshot.tasks.first { $0.id == assistant.selectedID } }
+    private var modelName: String {
+        let saved = (UserDefaults.standard.string(forKey: "aiModel") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return saved.isEmpty ? HomeworkAIProvider.current.defaultModel : saved
+    }
     var body: some View {
         ScrollView {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Homework AI Assistant").font(.title2); Spacer(); Button("Close") { dismiss() }.disabled(assistant.busy) }
-            Picker("Assignment", selection: $assistant.selectedID) {
-                Text("Choose an assignment").tag(nil as String?)
-                ForEach(store.snapshot.tasks.filter { ["assignment", "confirm"].contains($0.kind) }) { task in Text(task.title).tag(Optional(task.id)) }
-            }.disabled(assistant.busy)
-            if let task = selected {
-                Text("Due: " + (Beijing.parse(task.due).map(Beijing.dateTime) ?? "Not specified")).font(.callout)
-                ScrollView { Text(task.original.isEmpty ? "No written instructions. Add the question files below." : task.original).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }.frame(maxHeight: 100)
-                Text("Files to send").font(.headline)
-                ForEach(task.attachments.indices, id: \.self) { index in
-                    let attachment = task.attachments[index]
-                    if let url = store.localURL(for: attachment, in: task) {
-                        Toggle(attachment.name, isOn: Binding(get: { files.contains(url) }, set: { value in if value { files.append(url) } else { files.removeAll { $0 == url } } })).disabled(assistant.busy)
-                    } else { Text(attachment.name + " — not downloaded; add a local copy if needed.").font(.caption).foregroundStyle(.secondary) }
-                }
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Button("Add Files…") {
-                        let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.canChooseDirectories = false
-                        panel.begin { response in if response == .OK { files = Array(Set(files + panel.urls)) } }
-                    }.disabled(assistant.busy)
-                    Text("\(files.count) selected").font(.caption)
-                    Button("Clear") { files = [] }.disabled(assistant.busy)
+                    Text("AI Assistant").font(.title2.weight(.semibold))
+                    Spacer()
+                    Button("Close") { dismiss() }.disabled(assistant.busy)
                 }
-                ForEach(files, id: \.self) { Text($0.lastPathComponent).font(.caption) }
-                let providerLabel = HomeworkAIProvider.current.label
-                let modelName = (UserDefaults.standard.string(forKey: "aiModel") ?? "").isEmpty
-                    ? HomeworkAIProvider.current.defaultModel
-                    : UserDefaults.standard.string(forKey: "aiModel") ?? ""
-                Text("Generate an answer file with AI? Clicking Yes sends the instructions above and selected files to \(providerLabel) (\(modelName)). Review the result before submitting it.").font(.callout)
-                HStack {
-                    Button("No, thanks") { dismiss() }.disabled(assistant.busy)
-                    Button("Yes — Generate Answers") { assistant.generate(task, files: files, language: language == "en" ? "English" : "Chinese") }
-                        .buttonStyle(.borderedProminent).disabled(assistant.busy || (task.original.isEmpty && files.isEmpty))
-                    if assistant.busy { ProgressView().controlSize(.small); Button("Cancel") { assistant.cancel() } }
+                Picker("Assignment", selection: $assistant.selectedID) {
+                    Text("Choose an assignment").tag(nil as String?)
+                    ForEach(store.snapshot.tasks.filter { ["assignment", "confirm"].contains($0.kind) }) { task in
+                        Text(task.title).tag(Optional(task.id))
+                    }
+                }.disabled(assistant.busy)
+                if let task = selected {
+                    HStack(spacing: 8) {
+                        Text(task.subject).font(.caption.weight(.semibold)).foregroundStyle(jade)
+                        if let due = Beijing.parse(task.due) {
+                            Text("Due ") + Text(Beijing.dateTime(due)).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    ScrollView {
+                        Text(task.original.isEmpty ? "No written instructions. Add the question files below." : task.original)
+                            .font(.callout).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 84)
+                    .padding(8)
+                    .background(panel, in: RoundedRectangle(cornerRadius: 8))
+
+                    HStack(spacing: 8) {
+                        Text("Attachments").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Add…") {
+                            let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.canChooseDirectories = false
+                            panel.begin { response in if response == .OK { files = Array(Set(files + panel.urls)) } }
+                        }.disabled(assistant.busy)
+                        Button("Clear") { files = [] }.disabled(assistant.busy || files.isEmpty)
+                    }
+                    ForEach(task.attachments.indices, id: \.self) { index in
+                        let attachment = task.attachments[index]
+                        if let url = store.localURL(for: attachment, in: task) {
+                            Toggle(attachment.name, isOn: Binding(get: { files.contains(url) }, set: { value in
+                                if value { files.append(url) } else { files.removeAll { $0 == url } }
+                            })).toggleStyle(.checkbox).disabled(assistant.busy)
+                        } else {
+                            Text(attachment.name + " — not downloaded").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    ForEach(files.filter { local in !task.attachments.contains { store.localURL(for: $0, in: task) == local } }, id: \.self) { url in
+                        Text(url.lastPathComponent).font(.caption)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button("Generate") { assistant.generate(task, files: files, language: language == "en" ? "English" : "Chinese") }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(assistant.busy || (task.original.isEmpty && files.isEmpty))
+                        Text("\(HomeworkAIProvider.current.label) · \(modelName) · \(files.count) file(s)")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer()
+                        if assistant.busy {
+                            ProgressView().controlSize(.small)
+                            Button("Cancel") { assistant.cancel() }
+                        }
+                    }
+                } else {
+                    Text("Choose an assignment, or sync to load the homework referenced by the reminder.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-            } else { Text("Choose an assignment, or sync to load the homework referenced by the reminder.") }
-            if let error = assistant.error { Text(LocalizedStringKey(error)).foregroundStyle(.orange).textSelection(.enabled) }
-            if let url = assistant.resultURL {
-                Text("Answer file ready").font(.headline)
-                ScrollView { Text(assistant.resultText).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 160)
-                HStack { Button("Export File…") { assistant.export() }; Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
+                if let error = assistant.error { Text(LocalizedStringKey(error)).foregroundStyle(.orange).textSelection(.enabled) }
+                if let url = assistant.resultURL {
+                    Divider()
+                    Text(assistant.resultText)
+                        .font(.callout).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(panel, in: RoundedRectangle(cornerRadius: 8))
+                        .frame(height: 190)
+                    HStack { Button("Export…") { assistant.export() }; Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
+                }
+                if !assistant.history.isEmpty {
+                    DisclosureGroup("Saved drafts") {
+                        ScrollView {
+                            ForEach(assistant.history.prefix(20), id: \.self) { url in
+                                Button(url.lastPathComponent) { NSWorkspace.shared.open(url) }.buttonStyle(.link)
+                            }
+                        }.frame(maxHeight: 70)
+                    }.font(.caption)
+                }
             }
-            if !assistant.history.isEmpty {
-                DisclosureGroup("Saved answer files") {
-                    ScrollView { ForEach(assistant.history.prefix(20), id: \.self) { url in Button(url.lastPathComponent) { NSWorkspace.shared.open(url) }.buttonStyle(.link) } }.frame(maxHeight: 80)
-                }
-            }
-        }.padding(22)
-        }.frame(width: 660, height: 720).interactiveDismissDisabled(assistant.busy)
+            .padding(20)
+        }
+        .frame(width: 620, height: 620)
+        .interactiveDismissDisabled(assistant.busy)
         .onChange(of: assistant.selectedID) { _, _ in
             files = []
             assistant.error = nil

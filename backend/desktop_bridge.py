@@ -6,6 +6,7 @@ import sys
 import time
 
 import school_tasks as school
+from school_submit import submit as submit_task
 from school_grades import DYNAMIC_FILE, DYNAMIC_STATUS_FILE, add_count_estimates, course_categories, read_dump, semester_summary
 from school_timetable import REFRESH_SECONDS, TIMETABLE_FILE, load_timetable, read_timetable, week_start
 from task_report import SUBJECT_NAMES, display_status, pending, submission_bucket, task_summary
@@ -433,6 +434,22 @@ class DesktopBackend:
                         raise school.SyncError("无法导入校宝采集文件，请选择包含原始成绩响应的目录。") from exc
                     if not result["updated"]:
                         raise school.SyncError("本机已有更新的校宝成绩，已使用较新的记录。")
+            elif action == "submit":
+                emit("working", operation="submit")
+                staged = []
+                root_path = os.path.realpath(self.root)
+                for name in request.get("files") or []:
+                    path = os.path.realpath(name if os.path.isabs(name) else os.path.join(root_path, name))
+                    if not path.startswith(root_path + os.sep):
+                        raise school.SyncError("只能提交本机暂存目录里的文件。")
+                    staged.append(path)
+                with school.lock(self.root, "submit"):
+                    school.check_with_login(lambda client: submit_task(
+                        client, request.get("task"), staged, request.get("remark") or ""))
+                try:
+                    self.synchronize(now, manual=True)
+                except school.SyncError:
+                    pass
             elif action == "configure":
                 emit("working", operation="configure")
                 school.configure_auto_login(request["name"], request.pop("password"))

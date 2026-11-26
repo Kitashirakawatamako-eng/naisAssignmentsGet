@@ -317,6 +317,7 @@ private struct TaskDetail: View {
     let task: Assignment
     @ObservedObject var store: AssignmentStore
     @State private var showOriginal = false
+    @State private var confirmSubmit = false
 
     var body: some View {
         ScrollView {
@@ -403,6 +404,12 @@ private struct TaskDetail: View {
             .padding(22)
         }
         .accessibilityLabel("Assignment Details")
+        .alert("Submit this assignment?", isPresented: $confirmSubmit) {
+            Button("Cancel", role: .cancel) {}
+            Button("Submit") { store.submitToSchool(task) }
+        } message: {
+            Text("The staged files are uploaded to the school and the task is submitted right away. This cannot be undone from the app.")
+        }
     }
 
     @ViewBuilder
@@ -416,9 +423,8 @@ private struct TaskDetail: View {
                 Toggle("Writing this now", isOn: Binding(get: { working }, set: { store.setInProgress($0 ? task.id : nil) }))
                     .toggleStyle(.switch)
             }
-            Text("Files are staged on this Mac only. Submit on the school page when ready. While this assignment is marked, files arriving in Downloads (AirDrop) are added automatically.")
+            Text("Files stay on this Mac until you submit. AirDropped files join automatically while this assignment is marked.")
                 .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             if let notice = store.dropNotice, working {
                 Text(LocalizedStringKey(notice)).font(.caption).foregroundStyle(jade)
             }
@@ -443,8 +449,19 @@ private struct TaskDetail: View {
             HStack(spacing: 10) {
                 Button("Add Files…") { store.chooseSubmissionFiles(for: task.id) }
                 Button("Reveal Folder") { store.revealSubmissionFolder(task.id) }.disabled(files.isEmpty)
-                Button("Open School Submission Page") { store.open(schoolURL) }.buttonStyle(.link)
+                Spacer()
+                if store.submitting {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Submit to School") { confirmSubmit = true }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(files.isEmpty || store.submitting)
             }
+            if let notice = store.submitNotice {
+                Text(LocalizedStringKey(notice)).font(.caption)
+                    .foregroundStyle(notice.hasPrefix("Submitted") ? jade : .orange)
+            }
+            Button("Open School Submission Page") { store.open(schoolURL) }.buttonStyle(.link)
         }
         .padding(12)
         .background(panel, in: RoundedRectangle(cornerRadius: 10))
